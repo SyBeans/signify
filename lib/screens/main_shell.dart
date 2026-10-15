@@ -17,12 +17,12 @@ class _MainShellState extends State<MainShell> {
 
   @override
   Widget build(BuildContext context) {
-    final screens = const [
-      HomeScreen(),
-      EmergencyScreen(),
-      TranslateScreen(),
-      PhrasebookScreen(),
-      SettingsScreen(),
+    final screens = [
+      const HomeScreen(),
+      const EmergencyScreen(),
+      TranslateScreen(isActive: _i == 2), // ← 2 is the Translate tab index
+      const PhrasebookScreen(),
+      const SettingsScreen(),
     ];
     return Scaffold(
       body: IndexedStack(index: _i, children: screens),

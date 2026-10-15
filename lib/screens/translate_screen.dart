@@ -1,12 +1,26 @@
+import 'dart:async';
+import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
+import 'package:permission_handler/permission_handler.dart';
+import 'package:face_detection_tflite/face_detection_tflite.dart';
+import 'package:hand_landmarker/hand_landmarker.dart';
 import 'package:provider/provider.dart';
+
+import '../config/landmark_config.dart';
 import '../providers/app_state.dart';
 import '../services/tts_service.dart';
 import '../theme.dart';
+import '../widgets/landmark_painter.dart';
 
-class TranslateScreen extends StatelessWidget {
-  const TranslateScreen({super.key});
+class TranslateScreen extends StatefulWidget {
+  final bool isActive;
+  const TranslateScreen({super.key, this.isActive = true});
 
+  @override
+  State<TranslateScreen> createState() => _TranslateScreenState();
+}
+
+class _TranslateScreenState extends State<TranslateScreen> {
   static const _emotionMap = {
     'Positive': ('😊', AppColors.emoPositive),
     'Negative': ('😢', AppColors.emoNegative),
@@ -14,11 +28,209 @@ class TranslateScreen extends StatelessWidget {
     'Neutral': ('😐', AppColors.emoNeutral),
   };
 
+  CameraController? _controller;
+  FaceDetector? _faceDetector;
+  HandLandmarkerPlugin? _handPlugin;
+  StreamSubscription<List<Hand>>? _handSub;
+
+  List<CameraDescription> _cameras = [];
+  int _cameraIndex = 0;
+  int _resIndex = LandmarkConfig.defaultResolutionIndex;
+  bool _isSwitching = false;
+  bool _isProcessing = false;
+  int _frameCounter = 0;
+
+  List<LandmarkPoint> _faceLandmarks = [];
+  List<LandmarkPoint> _handLandmarks = [];
+
+  bool get _isFrontCamera =>
+      _cameras.isNotEmpty &&
+      _cameras[_cameraIndex].lensDirection == CameraLensDirection.front;
+
+  bool get _handDetected => _handLandmarks.isNotEmpty;
+  bool get _faceDetected => _faceLandmarks.isNotEmpty;
+  bool get _cameraReady =>
+      _controller != null && _controller!.value.isInitialized;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.isActive) _startCamera();
+  }
+
+  @override
+  void didUpdateWidget(covariant TranslateScreen old) {
+    super.didUpdateWidget(old);
+    if (widget.isActive && !old.isActive) {
+      _startCamera();
+    } else if (!widget.isActive && old.isActive) {
+      _stopCamera();
+    }
+  }
+
+  Future<void> _startCamera() async {
+    if (_controller != null) return;
+    final status = await Permission.camera.request();
+    if (status != PermissionStatus.granted) return;
+
+    if (_cameras.isEmpty) {
+      _cameras = await availableCameras();
+      _cameraIndex = _cameras.indexWhere(
+        (c) => c.lensDirection == CameraLensDirection.front,
+      );
+      if (_cameraIndex < 0) _cameraIndex = 0;
+    }
+    await _openCamera();
+  }
+
+  Future<void> _openCamera() async {
+    if (_cameras.isEmpty) return;
+
+    try {
+      await _controller?.dispose();
+    } catch (_) {}
+    _controller = null;
+
+    _controller = CameraController(
+      _cameras[_cameraIndex],
+      LandmarkConfig.resolutions[_resIndex],
+      enableAudio: false,
+    );
+
+    try {
+      await _controller!.initialize();
+    } catch (e) {
+      debugPrint('Camera init failed: $e');
+      return;
+    }
+
+    _faceDetector ??= await FaceDetector.create();
+    _handPlugin ??= HandLandmarkerPlugin.create(
+      numHands: 2,
+      minHandDetectionConfidence: 0.3,
+      delegate: HandLandmarkerDelegate.gpu,
+    );
+
+    _handSub ??= _handPlugin!.landmarkStream.listen((hands) {
+      final lms = <LandmarkPoint>[];
+      for (final hand in hands) {
+        for (final lm in hand.landmarks) {
+          lms.add(LandmarkPoint(lm.x, lm.y, lm.z));
+        }
+      }
+      _handLandmarks = lms;
+    });
+
+    if (mounted) setState(() => _isSwitching = false);
+    _controller!.startImageStream(_processFrame);
+  }
+
+  Future<void> _stopCamera() async {
+    try {
+      await _controller?.stopImageStream();
+    } catch (_) {}
+    try {
+      await _controller?.dispose();
+    } catch (_) {}
+    _controller = null;
+    _faceLandmarks = [];
+    _handLandmarks = [];
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _processFrame(CameraImage image) async {
+    if (_isProcessing || _isSwitching) return;
+    _frameCounter++;
+    if (_frameCounter % (LandmarkConfig.frameSkip + 1) != 0) return;
+
+    _isProcessing = true;
+    try {
+      try {
+        _handPlugin?.processFrame(
+          image,
+          _controller!.description.sensorOrientation,
+        );
+      } catch (e) {
+        debugPrint('Hand error: $e');
+      }
+
+      final faces = await _faceDetector?.detectFacesFromCameraImage(image);
+      final faceOut = <LandmarkPoint>[];
+      final frameW = image.width.toDouble();
+      final frameH = image.height.toDouble();
+
+      if (faces != null) {
+        for (final face in faces) {
+          final mesh = face.mesh;
+          if (mesh != null) {
+            for (final p in mesh.points) {
+              final px = p.x ?? 0.0;
+              final py = p.y ?? 0.0;
+              final pz = p.z ?? 0.0;
+              faceOut.add(
+                LandmarkPoint(
+                  (px > 1.5) ? (px / frameW) : px,
+                  (py > 1.5) ? (py / frameH) : py,
+                  pz,
+                ),
+              );
+            }
+          }
+        }
+      }
+
+      if (mounted) {
+        setState(() {
+          _faceLandmarks = faceOut;
+          _handLandmarks = List.from(_handLandmarks);
+        });
+      }
+    } catch (e) {
+      debugPrint('Frame error: $e');
+    } finally {
+      _isProcessing = false;
+    }
+  }
+
+  Future<void> _switchCamera() async {
+    if (_isSwitching || _cameras.length < 2) return;
+    setState(() => _isSwitching = true);
+    try {
+      await _controller?.stopImageStream();
+    } catch (_) {}
+    _cameraIndex = (_cameraIndex + 1) % _cameras.length;
+    _faceLandmarks = [];
+    _handLandmarks = [];
+    await _openCamera();
+  }
+
+  Future<void> _applyResolution(int newIndex) async {
+    if (_isSwitching || newIndex == _resIndex) return;
+    setState(() {
+      _isSwitching = true;
+      _resIndex = newIndex;
+    });
+    try {
+      await _controller?.stopImageStream();
+    } catch (_) {}
+    await _openCamera();
+  }
+
+  @override
+  void dispose() {
+    _handSub?.cancel();
+    _controller?.dispose();
+    _faceDetector?.dispose();
+    _handPlugin?.dispose();
+    super.dispose();
+  }
+
   @override
   Widget build(BuildContext context) {
     final state = context.watch<AppState>();
     final emo = state.currentEmotion;
     final emoData = _emotionMap[emo] ?? _emotionMap['Neutral']!;
+    final bottomInset = MediaQuery.of(context).viewPadding.bottom;
 
     return Container(
       color: AppColors.navy,
@@ -26,7 +238,7 @@ class TranslateScreen extends StatelessWidget {
         bottom: false,
         child: Column(
           children: [
-            // Top row
+            // ── Top row ──
             Padding(
               padding: const EdgeInsets.fromLTRB(20, 16, 20, 12),
               child: Row(
@@ -46,15 +258,17 @@ class TranslateScreen extends StatelessWidget {
                         Container(
                           width: 6,
                           height: 6,
-                          decoration: const BoxDecoration(
-                            color: AppColors.green,
+                          decoration: BoxDecoration(
+                            color: _cameraReady
+                                ? AppColors.green
+                                : Colors.orange,
                             shape: BoxShape.circle,
                           ),
                         ),
                         const SizedBox(width: 6),
-                        const Text(
-                          'DETECTING',
-                          style: TextStyle(
+                        Text(
+                          _cameraReady ? 'DETECTING' : 'STARTING',
+                          style: const TextStyle(
                             fontSize: 11,
                             fontWeight: FontWeight.w800,
                             letterSpacing: 0.8,
@@ -65,31 +279,92 @@ class TranslateScreen extends StatelessWidget {
                     ),
                   ),
                   const Spacer(),
-                  Container(
-                    width: 36,
-                    height: 36,
-                    decoration: BoxDecoration(
-                      color: Colors.white.withOpacity(0.08),
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    child: const Icon(
-                      Icons.menu,
-                      color: Colors.white,
-                      size: 18,
+                  PopupMenuButton<String>(
+                    tooltip: 'Options',
+                    offset: const Offset(0, 40),
+                    onSelected: (value) {
+                      switch (value) {
+                        case 'low':
+                          _applyResolution(0);
+                          break;
+                        case 'med':
+                          _applyResolution(1);
+                          break;
+                        case 'high':
+                          _applyResolution(2);
+                          break;
+                        case 'flip':
+                          _switchCamera();
+                          break;
+                      }
+                    },
+                    itemBuilder: (context) => [
+                      const PopupMenuItem<String>(
+                        enabled: false,
+                        height: 28,
+                        child: Text(
+                          'CAMERA RESOLUTION',
+                          style: TextStyle(
+                            fontSize: 10,
+                            fontWeight: FontWeight.w800,
+                            letterSpacing: 1.2,
+                            color: Colors.black54,
+                          ),
+                        ),
+                      ),
+                      CheckedPopupMenuItem<String>(
+                        value: 'low',
+                        checked: _resIndex == 0,
+                        child: const Text('Low  (240p)'),
+                      ),
+                      CheckedPopupMenuItem<String>(
+                        value: 'med',
+                        checked: _resIndex == 1,
+                        child: const Text('Medium  (480p)'),
+                      ),
+                      CheckedPopupMenuItem<String>(
+                        value: 'high',
+                        checked: _resIndex == 2,
+                        child: const Text('High  (720p)'),
+                      ),
+                      const PopupMenuDivider(),
+                      const PopupMenuItem<String>(
+                        value: 'flip',
+                        child: Row(
+                          children: [
+                            Icon(Icons.cameraswitch, size: 18),
+                            SizedBox(width: 10),
+                            Text('Flip camera'),
+                          ],
+                        ),
+                      ),
+                    ],
+                    child: Container(
+                      width: 36,
+                      height: 36,
+                      decoration: BoxDecoration(
+                        color: Colors.white.withOpacity(0.08),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: const Icon(
+                        Icons.menu,
+                        color: Colors.white,
+                        size: 18,
+                      ),
                     ),
                   ),
                 ],
               ),
             ),
 
-            // Hand / Face / Emotion chips
+            // ── Chips row ──
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 20),
               child: Row(
                 children: [
-                  _detectChip('HAND'),
+                  _detectChip('HAND', _handDetected),
                   const SizedBox(width: 8),
-                  _detectChip('FACE'),
+                  _detectChip('FACE', _faceDetected),
                   const SizedBox(width: 8),
                   Container(
                     padding: const EdgeInsets.symmetric(
@@ -122,7 +397,7 @@ class TranslateScreen extends StatelessWidget {
             ),
             const SizedBox(height: 14),
 
-            // Camera preview
+            // ── Camera preview (aspect-correct) ──
             Expanded(
               flex: 5,
               child: Container(
@@ -131,55 +406,57 @@ class TranslateScreen extends StatelessWidget {
                   color: Colors.black,
                   borderRadius: BorderRadius.circular(16),
                 ),
-                child: Stack(
-                  children: [
-                    // Corner brackets
-                    ..._corners(),
-                    const Center(
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(
-                            Icons.videocam_outlined,
-                            color: Colors.white24,
-                            size: 48,
-                          ),
-                          SizedBox(height: 8),
-                          Text(
-                            'Camera preview',
-                            style: TextStyle(
-                              color: Colors.white38,
-                              fontSize: 12,
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(16),
+                  child: _cameraReady
+                      ? Stack(
+                          fit: StackFit.expand,
+                          children: [
+                            // BoxFit.cover preserves the camera's aspect ratio
+                            // (fills box, crops edges) — matches painter math
+                            FittedBox(
+                              fit: BoxFit.cover,
+                              clipBehavior: Clip.hardEdge,
+                              child: SizedBox(
+                                width: _controller!.value.previewSize!.height,
+                                height: _controller!.value.previewSize!.width,
+                                child: CameraPreview(_controller!),
+                              ),
                             ),
-                          ),
-                          SizedBox(height: 4),
-                          Text(
-                            '(TFLite models plug in here)',
-                            style: TextStyle(
-                              color: Colors.white24,
-                              fontSize: 10,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    // Hand landmarks hint
-                    Positioned(
-                      left: 20,
-                      bottom: 20,
-                      child: Icon(
-                        Icons.back_hand_outlined,
-                        color: AppColors.green.withOpacity(0.5),
-                        size: 60,
-                      ),
-                    ),
-                  ],
+                            if (_faceLandmarks.isNotEmpty ||
+                                _handLandmarks.isNotEmpty)
+                              Positioned.fill(
+                                child: CustomPaint(
+                                  painter: LandmarkPainter(
+                                    faceLandmarks: _faceLandmarks,
+                                    handLandmarks: _handLandmarks,
+                                    previewSize:
+                                        _controller!.value.previewSize!,
+                                    isFrontCamera: _isFrontCamera,
+                                  ),
+                                ),
+                              ),
+                            ..._corners(),
+                            if (_isSwitching)
+                              const Positioned.fill(
+                                child: ColoredBox(
+                                  color: Colors.black54,
+                                  child: Center(
+                                    child: CircularProgressIndicator(
+                                      color: Colors.white,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                          ],
+                        )
+                      : _placeholder(),
                 ),
               ),
             ),
             const SizedBox(height: 14),
 
-            // Top-3 predictions
+            // ── Top-3 predictions (static for now) ──
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 20),
               child: Row(
@@ -194,7 +471,7 @@ class TranslateScreen extends StatelessWidget {
             ),
             const SizedBox(height: 14),
 
-            // Confidence
+            // ── Confidence bar (static for now) ──
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 20),
               child: Column(
@@ -224,7 +501,7 @@ class TranslateScreen extends StatelessWidget {
             ),
             const SizedBox(height: 14),
 
-            // Sentence builder card
+            // ── Sentence builder ──
             Expanded(
               flex: 6,
               child: Container(
@@ -233,7 +510,8 @@ class TranslateScreen extends StatelessWidget {
                   color: Colors.white,
                   borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
                 ),
-                padding: const EdgeInsets.fromLTRB(20, 20, 20, 12),
+                // Bottom padding includes system navigation inset
+                padding: EdgeInsets.fromLTRB(20, 16, 20, 12 + bottomInset),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -246,9 +524,8 @@ class TranslateScreen extends StatelessWidget {
                         color: AppColors.textSoft,
                       ),
                     ),
-                    const SizedBox(height: 14),
+                    const SizedBox(height: 10),
 
-                    // Word chip
                     if (state.sentence.isNotEmpty)
                       Row(
                         children: [
@@ -278,9 +555,8 @@ class TranslateScreen extends StatelessWidget {
                           ),
                         ],
                       ),
-                    const SizedBox(height: 14),
+                    const SizedBox(height: 10),
 
-                    // Sentence preview
                     Expanded(
                       child: SingleChildScrollView(
                         child: Column(
@@ -300,9 +576,7 @@ class TranslateScreen extends StatelessWidget {
                                           i++
                                         )
                                           TextSpan(
-                                            text: i == state.sentence.length - 1
-                                                ? '${state.sentence[i]['en']} '
-                                                : '${state.sentence[i]['en']} ',
+                                            text: '${state.sentence[i]['en']} ',
                                             style: TextStyle(
                                               fontSize: 22,
                                               fontWeight: FontWeight.w800,
@@ -353,7 +627,7 @@ class TranslateScreen extends StatelessWidget {
                       ),
                     ),
 
-                    // Actions
+                    // ── Actions ──
                     Row(
                       children: [
                         _iconBtn(
@@ -368,7 +642,7 @@ class TranslateScreen extends StatelessWidget {
                             style: FilledButton.styleFrom(
                               backgroundColor: AppColors.navy,
                               foregroundColor: Colors.white,
-                              padding: const EdgeInsets.symmetric(vertical: 14),
+                              padding: const EdgeInsets.symmetric(vertical: 12),
                               shape: RoundedRectangleBorder(
                                 borderRadius: BorderRadius.circular(14),
                               ),
@@ -403,7 +677,6 @@ class TranslateScreen extends StatelessWidget {
                         ),
                       ],
                     ),
-                    const SizedBox(height: 8),
                   ],
                 ),
               ),
@@ -414,10 +687,33 @@ class TranslateScreen extends StatelessWidget {
     );
   }
 
-  Widget _detectChip(String label) => Container(
+  Widget _placeholder() {
+    return Stack(
+      children: [
+        ..._corners(),
+        const Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.videocam_outlined, color: Colors.white24, size: 48),
+              SizedBox(height: 8),
+              Text(
+                'Starting camera…',
+                style: TextStyle(color: Colors.white38, fontSize: 12),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _detectChip(String label, bool active) => Container(
     padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
     decoration: BoxDecoration(
-      color: AppColors.green.withOpacity(0.15),
+      color: active
+          ? AppColors.green.withOpacity(0.15)
+          : Colors.white.withOpacity(0.08),
       borderRadius: BorderRadius.circular(20),
     ),
     child: Row(
@@ -426,19 +722,19 @@ class TranslateScreen extends StatelessWidget {
         Container(
           width: 6,
           height: 6,
-          decoration: const BoxDecoration(
-            color: AppColors.green,
+          decoration: BoxDecoration(
+            color: active ? AppColors.green : Colors.grey,
             shape: BoxShape.circle,
           ),
         ),
         const SizedBox(width: 6),
         Text(
           label,
-          style: const TextStyle(
+          style: TextStyle(
             fontSize: 11,
             fontWeight: FontWeight.w800,
             letterSpacing: 0.6,
-            color: AppColors.green,
+            color: active ? AppColors.green : Colors.grey,
           ),
         ),
       ],
@@ -476,6 +772,7 @@ class TranslateScreen extends StatelessWidget {
     ),
   );
 
+  // Smaller buttons (44 instead of 48) so the row fits comfortably
   Widget _iconBtn(
     IconData icon,
     Color color, {
@@ -486,8 +783,8 @@ class TranslateScreen extends StatelessWidget {
     onTap: onTap,
     borderRadius: BorderRadius.circular(12),
     child: Container(
-      width: 48,
-      height: 48,
+      width: 44,
+      height: 44,
       decoration: BoxDecoration(
         color: bg ?? Colors.white,
         borderRadius: BorderRadius.circular(12),
