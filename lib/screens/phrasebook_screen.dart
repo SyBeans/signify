@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../data/phrasebook_data.dart';
@@ -15,10 +16,59 @@ class _PhrasebookScreenState extends State<PhrasebookScreen> {
   String _category = 'All';
   final Set<String> _favs = {};
 
+  // Tap flash (whole row highlights for ~800ms)
+  String? _lastTapped;
+  Timer? _tapClearTimer;
+
+  // Speaking state (which phrase is currently being spoken)
+  String? _speakingPhrase;
+  Timer? _speakClearTimer;
+
+  @override
+  void dispose() {
+    _tapClearTimer?.cancel();
+    _speakClearTimer?.cancel();
+    super.dispose();
+  }
+
+  void _flashTap(String key) {
+    setState(() => _lastTapped = key);
+    _tapClearTimer?.cancel();
+    _tapClearTimer = Timer(const Duration(milliseconds: 800), () {
+      if (mounted) setState(() => _lastTapped = null);
+    });
+  }
+
+  Future<void> _speakPhrase(AppState state, Phrase p) async {
+    final text = state.speechLanguage == 'fil' ? p.filipino : p.english;
+
+    // Show speaking state on this phrase
+    setState(() => _speakingPhrase = p.english);
+
+    // Estimate duration: ~80 ms per character, min 1.5s
+    final estimated = Duration(
+      milliseconds: (text.length * 80).clamp(1500, 8000),
+    );
+
+    await TtsService.speak(
+      text,
+      lang: state.speechLanguage,
+      speed: state.speechSpeed,
+    );
+
+    // Clear speaking state after the estimate
+    _speakClearTimer?.cancel();
+    _speakClearTimer = Timer(estimated, () {
+      if (mounted && _speakingPhrase == p.english) {
+        setState(() => _speakingPhrase = null);
+      }
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final state = context.watch<AppState>();
-    final cats = [
+    const cats = [
       'All',
       'Emergency',
       'Greetings',
@@ -27,12 +77,16 @@ class _PhrasebookScreenState extends State<PhrasebookScreen> {
       'Food',
       'School',
     ];
+
     final filtered = _category == 'All'
         ? phrasebookData
         : phrasebookData.where((p) => p.category == _category).toList();
 
+    final favorites = filtered.where((p) => _favs.contains(p.english)).toList();
+    final rest = filtered.where((p) => !_favs.contains(p.english)).toList();
+
     final grouped = <String, List<Phrase>>{};
-    for (final p in filtered) {
+    for (final p in rest) {
       grouped.putIfAbsent(p.category, () => []).add(p);
     }
 
@@ -93,6 +147,43 @@ class _PhrasebookScreenState extends State<PhrasebookScreen> {
               child: ListView(
                 padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
                 children: [
+                  if (favorites.isNotEmpty) ...[
+                    Row(
+                      children: [
+                        const Icon(
+                          Icons.star_rounded,
+                          color: AppColors.orange,
+                          size: 14,
+                        ),
+                        const SizedBox(width: 6),
+                        const Text(
+                          'FAVORITES',
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w800,
+                            letterSpacing: 1.4,
+                            color: AppColors.orange,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 10),
+                    ...favorites.map(
+                      (p) => Padding(
+                        padding: const EdgeInsets.only(bottom: 10),
+                        child: _PhraseItem(
+                          phrase: p,
+                          fav: true,
+                          isFlashing: _lastTapped == p.english,
+                          isSpeaking: _speakingPhrase == p.english,
+                          onTap: () => _flashTap(p.english),
+                          onFav: () => setState(() => _favs.remove(p.english)),
+                          onSpeak: () => _speakPhrase(state, p),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                  ],
                   for (final cat in grouped.keys) ...[
                     Text(
                       cat.toUpperCase(),
@@ -110,18 +201,17 @@ class _PhrasebookScreenState extends State<PhrasebookScreen> {
                         child: _PhraseItem(
                           phrase: p,
                           fav: _favs.contains(p.english),
+                          isFlashing: _lastTapped == p.english,
+                          isSpeaking: _speakingPhrase == p.english,
+                          onTap: () => _flashTap(p.english),
                           onFav: () => setState(() {
-                            _favs.contains(p.english)
-                                ? _favs.remove(p.english)
-                                : _favs.add(p.english);
+                            if (_favs.contains(p.english)) {
+                              _favs.remove(p.english);
+                            } else {
+                              _favs.add(p.english);
+                            }
                           }),
-                          onSpeak: () => TtsService.speak(
-                            state.speechLanguage == 'fil'
-                                ? p.filipino
-                                : p.english,
-                            lang: state.speechLanguage,
-                            speed: state.speechSpeed,
-                          ),
+                          onSpeak: () => _speakPhrase(state, p),
                         ),
                       ),
                     ),
@@ -140,71 +230,178 @@ class _PhrasebookScreenState extends State<PhrasebookScreen> {
 class _PhraseItem extends StatelessWidget {
   final Phrase phrase;
   final bool fav;
+  final bool isFlashing;
+  final bool isSpeaking;
+  final VoidCallback onTap;
   final VoidCallback onFav;
   final VoidCallback onSpeak;
 
   const _PhraseItem({
     required this.phrase,
     required this.fav,
+    required this.isFlashing,
+    required this.isSpeaking,
+    required this.onTap,
     required this.onFav,
     required this.onSpeak,
   });
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: Colors.white,
+    return Material(
+      color: Colors.transparent,
+      borderRadius: BorderRadius.circular(14),
+      child: InkWell(
+        onTap: onTap,
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: AppColors.border),
-      ),
-      child: Row(
-        children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  phrase.english,
-                  style: const TextStyle(
-                    fontSize: 15,
-                    fontWeight: FontWeight.w700,
+        splashColor: AppColors.blue.withOpacity(0.12),
+        highlightColor: AppColors.blue.withOpacity(0.06),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 180),
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: isFlashing ? AppColors.blue.withOpacity(0.10) : Colors.white,
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(
+              color: isFlashing ? AppColors.blue : AppColors.border,
+              width: isFlashing ? 2 : 1,
+            ),
+          ),
+          child: Row(
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      phrase.english,
+                      style: const TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(phrase.filipino, style: AppText.small),
+                  ],
+                ),
+              ),
+
+              // ── Play button with speaking state ──
+              _SpeakButton(isSpeaking: isSpeaking, onTap: onSpeak),
+
+              const SizedBox(width: 8),
+
+              // Favorite star
+              GestureDetector(
+                onTap: onFav,
+                behavior: HitTestBehavior.opaque,
+                child: Padding(
+                  padding: const EdgeInsets.all(6),
+                  child: Icon(
+                    fav ? Icons.star_rounded : Icons.star_border_rounded,
+                    color: fav ? AppColors.orange : AppColors.grey,
+                    size: 22,
                   ),
                 ),
-                const SizedBox(height: 3),
-                Text(phrase.filipino, style: AppText.small),
-              ],
-            ),
+              ),
+            ],
           ),
-          InkWell(
-            onTap: onSpeak,
-            borderRadius: BorderRadius.circular(20),
-            child: Container(
-              width: 36,
-              height: 36,
+        ),
+      ),
+    );
+  }
+}
+
+/// Speak button that animates (pulses + changes to blue) while speaking.
+class _SpeakButton extends StatefulWidget {
+  final bool isSpeaking;
+  final VoidCallback onTap;
+
+  const _SpeakButton({required this.isSpeaking, required this.onTap});
+
+  @override
+  State<_SpeakButton> createState() => _SpeakButtonState();
+}
+
+class _SpeakButtonState extends State<_SpeakButton>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _pulseController;
+
+  @override
+  void initState() {
+    super.initState();
+    _pulseController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 700),
+    );
+    if (widget.isSpeaking) _pulseController.repeat(reverse: true);
+  }
+
+  @override
+  void didUpdateWidget(covariant _SpeakButton old) {
+    super.didUpdateWidget(old);
+    if (widget.isSpeaking && !old.isSpeaking) {
+      _pulseController.repeat(reverse: true);
+    } else if (!widget.isSpeaking && old.isSpeaking) {
+      _pulseController.stop();
+      _pulseController.value = 0;
+    }
+  }
+
+  @override
+  void dispose() {
+    _pulseController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final speaking = widget.isSpeaking;
+
+    return GestureDetector(
+      onTap: widget.onTap,
+      behavior: HitTestBehavior.opaque,
+      child: AnimatedBuilder(
+        animation: _pulseController,
+        builder: (context, child) {
+          // Scale goes from 1.0 to 1.15 while speaking
+          final scale = speaking ? 1.0 + 0.15 * _pulseController.value : 1.0;
+
+          return Transform.scale(
+            scale: scale,
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 200),
+              width: 40,
+              height: 40,
               decoration: BoxDecoration(
-                color: AppColors.bg,
+                // Blue circle while speaking, off-white otherwise
+                color: speaking ? AppColors.blue : AppColors.bg,
                 shape: BoxShape.circle,
-                border: Border.all(color: AppColors.border),
+                border: Border.all(
+                  color: speaking ? AppColors.blue : AppColors.border,
+                  width: speaking ? 2 : 1,
+                ),
+                boxShadow: speaking
+                    ? [
+                        BoxShadow(
+                          color: AppColors.blue.withOpacity(0.4),
+                          blurRadius: 12,
+                          spreadRadius: 1,
+                        ),
+                      ]
+                    : null,
               ),
-              child: const Icon(
-                Icons.play_arrow_rounded,
-                size: 18,
-                color: AppColors.textDark,
+              child: Icon(
+                speaking
+                    ? Icons
+                          .volume_up_rounded // active icon
+                    : Icons.play_arrow_rounded, // idle icon
+                size: 20,
+                color: speaking ? Colors.white : AppColors.textDark,
               ),
             ),
-          ),
-          const SizedBox(width: 8),
-          GestureDetector(
-            onTap: onFav,
-            child: Icon(
-              fav ? Icons.star_rounded : Icons.star_border_rounded,
-              color: fav ? AppColors.orange : AppColors.grey,
-              size: 22,
-            ),
-          ),
-        ],
+          );
+        },
       ),
     );
   }

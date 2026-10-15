@@ -690,7 +690,7 @@ class _TranslateScreenState extends State<TranslateScreen> {
                       children: [
                         _iconBtn(
                           Icons.arrow_back,
-                          Colors.white,
+                          AppColors.textDark,
                           border: true,
                           onTap: state.backspace,
                         ),
