@@ -31,100 +31,107 @@ class _PhrasebookScreenState extends State<PhrasebookScreen> {
         ? phrasebookData
         : phrasebookData.where((p) => p.category == _category).toList();
 
-    // Group by category
     final grouped = <String, List<Phrase>>{};
     for (final p in filtered) {
       grouped.putIfAbsent(p.category, () => []).add(p);
     }
 
-    return SafeArea(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(20, 16, 20, 12),
-            child: Text('Phrasebook', style: AppText.header),
-          ),
-          SizedBox(
-            height: 40,
-            child: ListView.separated(
-              padding: const EdgeInsets.symmetric(horizontal: 20),
-              scrollDirection: Axis.horizontal,
-              itemCount: cats.length,
-              separatorBuilder: (_, __) => const SizedBox(width: 8),
-              itemBuilder: (_, i) {
-                final c = cats[i];
-                final active = c == _category;
-                return GestureDetector(
-                  onTap: () => setState(() => _category = c),
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 16,
-                      vertical: 8,
-                    ),
-                    decoration: BoxDecoration(
-                      color: active ? AppColors.blue : Colors.white,
-                      borderRadius: BorderRadius.circular(20),
-                      border: Border.all(
-                        color: active ? AppColors.blue : AppColors.border,
+    return Scaffold(
+      backgroundColor: AppColors.bg,
+      appBar: AppBar(
+        title: Text('Phrasebook', style: AppText.header),
+        backgroundColor: AppColors.bg,
+        elevation: 0,
+        scrolledUnderElevation: 0,
+        leading: Navigator.of(context).canPop() ? const BackButton() : null,
+      ),
+      body: SafeArea(
+        top: false,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const SizedBox(height: 8),
+            SizedBox(
+              height: 40,
+              child: ListView.separated(
+                padding: const EdgeInsets.symmetric(horizontal: 20),
+                scrollDirection: Axis.horizontal,
+                itemCount: cats.length,
+                separatorBuilder: (_, __) => const SizedBox(width: 8),
+                itemBuilder: (_, i) {
+                  final c = cats[i];
+                  final active = c == _category;
+                  return GestureDetector(
+                    onTap: () => setState(() => _category = c),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 8,
                       ),
-                    ),
-                    child: Text(
-                      c,
-                      style: TextStyle(
-                        fontWeight: FontWeight.w700,
-                        fontSize: 13,
-                        color: active ? Colors.white : AppColors.textDark,
+                      decoration: BoxDecoration(
+                        color: active ? AppColors.blue : Colors.white,
+                        borderRadius: BorderRadius.circular(20),
+                        border: Border.all(
+                          color: active ? AppColors.blue : AppColors.border,
+                        ),
                       ),
-                    ),
-                  ),
-                );
-              },
-            ),
-          ),
-          const SizedBox(height: 16),
-          Expanded(
-            child: ListView(
-              padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
-              children: [
-                for (final cat in grouped.keys) ...[
-                  Text(
-                    cat.toUpperCase(),
-                    style: const TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.w800,
-                      letterSpacing: 1.4,
-                      color: AppColors.textSoft,
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  ...grouped[cat]!.map(
-                    (p) => Padding(
-                      padding: const EdgeInsets.only(bottom: 10),
-                      child: _PhraseItem(
-                        phrase: p,
-                        fav: _favs.contains(p.english),
-                        onFav: () => setState(() {
-                          _favs.contains(p.english)
-                              ? _favs.remove(p.english)
-                              : _favs.add(p.english);
-                        }),
-                        onSpeak: () => TtsService.speak(
-                          state.speechLanguage == 'fil'
-                              ? p.filipino
-                              : p.english,
-                          lang: state.speechLanguage,
-                          speed: state.speechSpeed,
+                      child: Text(
+                        c,
+                        style: TextStyle(
+                          fontWeight: FontWeight.w700,
+                          fontSize: 13,
+                          color: active ? Colors.white : AppColors.textDark,
                         ),
                       ),
                     ),
-                  ),
-                  const SizedBox(height: 16),
-                ],
-              ],
+                  );
+                },
+              ),
             ),
-          ),
-        ],
+            const SizedBox(height: 16),
+            Expanded(
+              child: ListView(
+                padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+                children: [
+                  for (final cat in grouped.keys) ...[
+                    Text(
+                      cat.toUpperCase(),
+                      style: const TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: 1.4,
+                        color: AppColors.textSoft,
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    ...grouped[cat]!.map(
+                      (p) => Padding(
+                        padding: const EdgeInsets.only(bottom: 10),
+                        child: _PhraseItem(
+                          phrase: p,
+                          fav: _favs.contains(p.english),
+                          onFav: () => setState(() {
+                            _favs.contains(p.english)
+                                ? _favs.remove(p.english)
+                                : _favs.add(p.english);
+                          }),
+                          onSpeak: () => TtsService.speak(
+                            state.speechLanguage == 'fil'
+                                ? p.filipino
+                                : p.english,
+                            lang: state.speechLanguage,
+                            speed: state.speechSpeed,
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                  ],
+                ],
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
