@@ -43,6 +43,11 @@ class _TranslateScreenState extends State<TranslateScreen> {
   List<LandmarkPoint> _faceLandmarks = [];
   List<LandmarkPoint> _handLandmarks = [];
 
+  // FPS tracking
+  int _framesSinceFps = 0;
+  int _lastFpsTime = DateTime.now().millisecondsSinceEpoch;
+  double _fps = 0;
+
   bool get _isFrontCamera =>
       _cameras.isNotEmpty &&
       _cameras[_cameraIndex].lensDirection == CameraLensDirection.front;
@@ -135,6 +140,7 @@ class _TranslateScreenState extends State<TranslateScreen> {
     _controller = null;
     _faceLandmarks = [];
     _handLandmarks = [];
+    _fps = 0;
     if (mounted) setState(() {});
   }
 
@@ -177,6 +183,14 @@ class _TranslateScreenState extends State<TranslateScreen> {
             }
           }
         }
+      }
+
+      _framesSinceFps++;
+      final now = DateTime.now().millisecondsSinceEpoch;
+      if (now - _lastFpsTime >= 1000) {
+        _fps = _framesSinceFps * 1000 / (now - _lastFpsTime);
+        _framesSinceFps = 0;
+        _lastFpsTime = now;
       }
 
       if (mounted) {
@@ -238,11 +252,12 @@ class _TranslateScreenState extends State<TranslateScreen> {
         bottom: false,
         child: Column(
           children: [
-            // ── Top row ──
+            // ── Top row: status pill on left, 4 compact chips on right ──
             Padding(
-              padding: const EdgeInsets.fromLTRB(20, 16, 20, 12),
+              padding: const EdgeInsets.fromLTRB(20, 16, 16, 12),
               child: Row(
                 children: [
+                  // Status pill
                   Container(
                     padding: const EdgeInsets.symmetric(
                       horizontal: 10,
@@ -267,9 +282,9 @@ class _TranslateScreenState extends State<TranslateScreen> {
                         ),
                         const SizedBox(width: 6),
                         Text(
-                          _cameraReady ? 'DETECTING' : 'STARTING',
+                          _cameraReady ? 'LIVE' : 'STARTING',
                           style: const TextStyle(
-                            fontSize: 11,
+                            fontSize: 10,
                             fontWeight: FontWeight.w800,
                             letterSpacing: 0.8,
                             color: Colors.white,
@@ -279,9 +294,55 @@ class _TranslateScreenState extends State<TranslateScreen> {
                     ),
                   ),
                   const Spacer(),
+
+                  // 1. FPS
+                  _miniChip(
+                    child: Text(
+                      '${_fps.toStringAsFixed(0)}fps',
+                      style: const TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.w800,
+                        color: AppColors.green,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+
+                  // 2. Cam indicator (tappable — flips camera)
+                  _miniIconChip(
+                    onTap: _switchCamera,
+                    child: Text(
+                      _isFrontCamera ? 'F' : 'B',
+                      style: const TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w800,
+                        color: Colors.cyan,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+
+                  // 3. Resolution (tappable — cycles)
+                  _miniIconChip(
+                    onTap: () => _applyResolution(
+                      (_resIndex + 1) % LandmarkConfig.resolutions.length,
+                    ),
+                    child: Text(
+                      LandmarkConfig.resolutionLabels[_resIndex],
+                      style: const TextStyle(
+                        fontSize: 9,
+                        fontWeight: FontWeight.w800,
+                        color: Colors.yellow,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+
+                  // 4. Menu
                   PopupMenuButton<String>(
                     tooltip: 'Options',
                     offset: const Offset(0, 40),
+                    padding: EdgeInsets.zero,
                     onSelected: (value) {
                       switch (value) {
                         case 'low':
@@ -340,16 +401,16 @@ class _TranslateScreenState extends State<TranslateScreen> {
                       ),
                     ],
                     child: Container(
-                      width: 36,
-                      height: 36,
+                      width: 32,
+                      height: 32,
                       decoration: BoxDecoration(
                         color: Colors.white.withOpacity(0.08),
-                        borderRadius: BorderRadius.circular(10),
+                        borderRadius: BorderRadius.circular(8),
                       ),
                       child: const Icon(
                         Icons.menu,
                         color: Colors.white,
-                        size: 18,
+                        size: 16,
                       ),
                     ),
                   ),
@@ -357,7 +418,7 @@ class _TranslateScreenState extends State<TranslateScreen> {
               ),
             ),
 
-            // ── Chips row ──
+            // ── Chips row: HAND | FACE | Emotion (restored) ──
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 20),
               child: Row(
@@ -397,7 +458,7 @@ class _TranslateScreenState extends State<TranslateScreen> {
             ),
             const SizedBox(height: 14),
 
-            // ── Camera preview (aspect-correct) ──
+            // ── Live camera preview ──
             Expanded(
               flex: 5,
               child: Container(
@@ -412,8 +473,6 @@ class _TranslateScreenState extends State<TranslateScreen> {
                       ? Stack(
                           fit: StackFit.expand,
                           children: [
-                            // BoxFit.cover preserves the camera's aspect ratio
-                            // (fills box, crops edges) — matches painter math
                             FittedBox(
                               fit: BoxFit.cover,
                               clipBehavior: Clip.hardEdge,
@@ -471,7 +530,7 @@ class _TranslateScreenState extends State<TranslateScreen> {
             ),
             const SizedBox(height: 14),
 
-            // ── Confidence bar (static for now) ──
+            // ── Confidence bar (static) ──
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 20),
               child: Column(
@@ -510,7 +569,6 @@ class _TranslateScreenState extends State<TranslateScreen> {
                   color: Colors.white,
                   borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
                 ),
-                // Bottom padding includes system navigation inset
                 padding: EdgeInsets.fromLTRB(20, 16, 20, 12 + bottomInset),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -708,6 +766,24 @@ class _TranslateScreenState extends State<TranslateScreen> {
     );
   }
 
+  Widget _miniChip({required Widget child}) => Container(
+    constraints: const BoxConstraints(minWidth: 32, minHeight: 28),
+    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+    decoration: BoxDecoration(
+      color: Colors.white.withOpacity(0.08),
+      borderRadius: BorderRadius.circular(20),
+    ),
+    alignment: Alignment.center,
+    child: child,
+  );
+
+  Widget _miniIconChip({required Widget child, required VoidCallback onTap}) =>
+      InkWell(
+        onTap: _isSwitching ? null : onTap,
+        borderRadius: BorderRadius.circular(20),
+        child: _miniChip(child: child),
+      );
+
   Widget _detectChip(String label, bool active) => Container(
     padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
     decoration: BoxDecoration(
@@ -772,7 +848,6 @@ class _TranslateScreenState extends State<TranslateScreen> {
     ),
   );
 
-  // Smaller buttons (44 instead of 48) so the row fits comfortably
   Widget _iconBtn(
     IconData icon,
     Color color, {

@@ -8,6 +8,7 @@ import 'settings_screen.dart';
 
 class MainShell extends StatefulWidget {
   const MainShell({super.key});
+
   @override
   State<MainShell> createState() => _MainShellState();
 }
@@ -15,21 +16,25 @@ class MainShell extends StatefulWidget {
 class _MainShellState extends State<MainShell> {
   int _i = 0;
 
+  void _goToTab(int index) {
+    if (index < 0 || index > 4) return;
+    setState(() => _i = index);
+  }
+
   @override
   Widget build(BuildContext context) {
     final screens = [
-      const HomeScreen(),
+      // Home needs the callback to jump to the Translate tab
+      HomeScreen(onStartTranslation: () => _goToTab(2)),
       const EmergencyScreen(),
-      TranslateScreen(isActive: _i == 2), // ← 2 is the Translate tab index
+      TranslateScreen(isActive: _i == 2),
       const PhrasebookScreen(),
       const SettingsScreen(),
     ];
+
     return Scaffold(
       body: IndexedStack(index: _i, children: screens),
-      bottomNavigationBar: SignifyBottomNav(
-        current: _i,
-        onTap: (v) => setState(() => _i = v),
-      ),
+      bottomNavigationBar: SignifyBottomNav(current: _i, onTap: _goToTab),
     );
   }
 }

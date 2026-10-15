@@ -7,7 +7,10 @@ import 'phrasebook_screen.dart';
 import 'history_screen.dart' show HistoryScreen;
 
 class HomeScreen extends StatelessWidget {
-  const HomeScreen({super.key});
+  /// Called when user taps the "Start Translation" hero card.
+  final VoidCallback? onStartTranslation;
+
+  const HomeScreen({super.key, this.onStartTranslation});
 
   @override
   Widget build(BuildContext context) {
@@ -65,8 +68,15 @@ class HomeScreen extends StatelessWidget {
           ),
           const SizedBox(height: 20),
 
-          // Hero card
-          _HeroCard(onTap: () {}),
+          // Hero card (tappable)
+          _HeroCard(
+            onTap:
+                onStartTranslation ??
+                () {
+                  // Fallback: navigate to Translate tab via MainShell
+                  DefaultTabController.maybeOf(context);
+                },
+          ),
           const SizedBox(height: 16),
 
           // Quick tiles
@@ -145,99 +155,173 @@ class _HeroCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return InkWell(
-      onTap: onTap,
+    return Material(
+      color: Colors.transparent,
       borderRadius: BorderRadius.circular(20),
-      child: Container(
-        padding: const EdgeInsets.all(20),
-        decoration: BoxDecoration(
-          color: AppColors.navy,
-          borderRadius: BorderRadius.circular(20),
-        ),
-        child: Row(
-          children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    'TAP TO BEGIN',
-                    style: TextStyle(
-                      fontSize: 10,
-                      fontWeight: FontWeight.w800,
-                      letterSpacing: 1.5,
-                      color: AppColors.green,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(20),
+        child: Container(
+          padding: const EdgeInsets.all(20),
+          decoration: BoxDecoration(
+            color: AppColors.navy,
+            borderRadius: BorderRadius.circular(20),
+          ),
+          child: Row(
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'TAP TO BEGIN',
+                      style: TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: 1.5,
+                        color: AppColors.green,
+                      ),
                     ),
-                  ),
-                  const SizedBox(height: 12),
-                  const Text(
-                    'Start Translation',
-                    style: TextStyle(
-                      fontSize: 26,
-                      fontWeight: FontWeight.w800,
-                      color: Colors.white,
+                    const SizedBox(height: 12),
+                    const Text(
+                      'Start Translation',
+                      style: TextStyle(
+                        fontSize: 26,
+                        fontWeight: FontWeight.w800,
+                        color: Colors.white,
+                      ),
                     ),
-                  ),
-                  const SizedBox(height: 10),
-                  Text(
-                    'Point the camera and sign —\ntext and speech appear instantly.',
-                    style: TextStyle(
-                      fontSize: 13,
-                      height: 1.4,
-                      color: Colors.white.withOpacity(0.75),
+                    const SizedBox(height: 10),
+                    Text(
+                      'Point the camera and sign —\ntext and speech appear instantly.',
+                      style: TextStyle(
+                        fontSize: 13,
+                        height: 1.4,
+                        color: Colors.white.withOpacity(0.75),
+                      ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
-            ),
-            const SizedBox(width: 12),
-            _DotsIllustration(),
-          ],
+              const SizedBox(width: 12),
+              const _HandLandmarkIllustration(),
+            ],
+          ),
         ),
       ),
     );
   }
 }
 
-class _DotsIllustration extends StatelessWidget {
+/// A 21-landmark hand illustration matching MediaPipe's topology.
+/// Same purple accent as the original, now shaped like an actual hand.
+class _HandLandmarkIllustration extends StatelessWidget {
+  const _HandLandmarkIllustration();
+
   @override
   Widget build(BuildContext context) {
     return SizedBox(
-      width: 70,
-      height: 90,
-      child: CustomPaint(painter: _DotsPainter()),
+      width: 80,
+      height: 100,
+      child: CustomPaint(painter: _HandLandmarkPainter()),
     );
   }
 }
 
-class _DotsPainter extends CustomPainter {
+class _HandLandmarkPainter extends CustomPainter {
+  // MediaPipe 21-landmark hand topology, normalized within a 0..1 box.
+  // (x, y) coordinates laid out to look like an upright right hand.
+  static const List<List<double>> _points = [
+    // 0 wrist
+    [0.50, 0.95],
+    // 1-4 thumb
+    [0.28, 0.86],
+    [0.14, 0.75],
+    [0.06, 0.62],
+    [0.02, 0.48],
+    // 5-8 index
+    [0.38, 0.55],
+    [0.34, 0.40],
+    [0.31, 0.27],
+    [0.28, 0.14],
+    // 9-12 middle
+    [0.53, 0.50],
+    [0.53, 0.32],
+    [0.53, 0.18],
+    [0.53, 0.05],
+    // 13-16 ring
+    [0.68, 0.55],
+    [0.71, 0.40],
+    [0.73, 0.28],
+    [0.76, 0.15],
+    // 17-20 pinky
+    [0.80, 0.64],
+    [0.86, 0.54],
+    [0.90, 0.44],
+    [0.94, 0.34],
+  ];
+
+  // Bone connections (MediaPipe HAND_CONNECTIONS)
+  static const List<List<int>> _connections = [
+    // Palm (wrist to base of each finger)
+    [0, 1],
+    [0, 5],
+    [0, 17],
+    [5, 9],
+    [9, 13],
+    [13, 17],
+    // Thumb
+    [1, 2], [2, 3], [3, 4],
+    // Index
+    [5, 6], [6, 7], [7, 8],
+    // Middle
+    [9, 10], [10, 11], [11, 12],
+    // Ring
+    [13, 14], [14, 15], [15, 16],
+    // Pinky
+    [17, 18], [18, 19], [19, 20],
+  ];
+
   @override
   void paint(Canvas canvas, Size size) {
-    final glow = Paint()
-      ..color = const Color(0xFF8B5CF6).withOpacity(0.5)
-      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 8);
-    final dot = Paint()..color = const Color(0xFFA78BFA);
-    final pts = <Offset>[
-      Offset(size.width * 0.5, size.height * 0.1),
-      Offset(size.width * 0.15, size.height * 0.35),
-      Offset(size.width * 0.85, size.height * 0.35),
-      Offset(size.width * 0.15, size.height * 0.75),
-      Offset(size.width * 0.85, size.height * 0.75),
-      Offset(size.width * 0.5, size.height * 0.95),
-    ];
-    for (final p in pts) {
-      canvas.drawCircle(p, 6, glow);
-      canvas.drawCircle(p, 3, dot);
+    final w = size.width;
+    final h = size.height;
+
+    // Convert normalized to screen coords
+    List<Offset> pts() =>
+        _points.map((p) => Offset(p[0] * w, p[1] * h)).toList(growable: false);
+
+    final offsets = pts();
+
+    // Bones
+    final bonePaint = Paint()
+      ..color = const Color(0xFF8B5CF6).withOpacity(0.55)
+      ..strokeWidth = 1.5
+      ..strokeCap = StrokeCap.round
+      ..style = PaintingStyle.stroke;
+
+    for (final c in _connections) {
+      canvas.drawLine(offsets[c[0]], offsets[c[1]], bonePaint);
     }
-    final line = Paint()
-      ..color = const Color(0xFF8B5CF6).withOpacity(0.3)
-      ..strokeWidth = 1;
-    canvas.drawLine(pts[1], pts[0], line);
-    canvas.drawLine(pts[2], pts[0], line);
-    canvas.drawLine(pts[1], pts[3], line);
-    canvas.drawLine(pts[2], pts[4], line);
-    canvas.drawLine(pts[3], pts[5], line);
-    canvas.drawLine(pts[4], pts[5], line);
+
+    // Glow behind dots
+    final glow = Paint()
+      ..color = const Color(0xFF8B5CF6).withOpacity(0.35)
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 6);
+
+    // Joints
+    final jointPaint = Paint()..color = const Color(0xFFA78BFA);
+    final tipPaint = Paint()..color = const Color(0xFFC4B5FD);
+
+    // Finger tips are 4, 8, 12, 16, 20. Wrist is 0.
+    const tips = {4, 8, 12, 16, 20};
+
+    for (int i = 0; i < offsets.length; i++) {
+      final isTip = tips.contains(i);
+      final r = isTip ? 3.5 : 2.2;
+      canvas.drawCircle(offsets[i], r + 1.5, glow);
+      canvas.drawCircle(offsets[i], r, isTip ? tipPaint : jointPaint);
+    }
   }
 
   @override
