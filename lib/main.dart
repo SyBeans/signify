@@ -16,13 +16,33 @@ void main() {
 
 class SignifyApp extends StatelessWidget {
   const SignifyApp({super.key});
+
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'Signify',
-      debugShowCheckedModeBanner: false,
-      theme: buildSignifyTheme(),
-      home: const MainShell(),
+    return Consumer<AppState>(
+      builder: (context, state, _) {
+        // Determine text scale
+        double textScale = 1.0;
+        if (state.textSize == 'S') textScale = 0.85;
+        if (state.textSize == 'L') textScale = 1.15;
+
+        return MaterialApp(
+          title: 'Signify',
+          debugShowCheckedModeBanner: false,
+          theme: buildSignifyTheme(),
+          darkTheme: buildSignifyDarkTheme(),
+          themeMode: state.darkMode ? ThemeMode.dark : ThemeMode.light,
+          builder: (context, child) {
+            return MediaQuery(
+              data: MediaQuery.of(
+                context,
+              ).copyWith(textScaler: TextScaler.linear(textScale)),
+              child: child!,
+            );
+          },
+          home: const MainShell(),
+        );
+      },
     );
   }
 }

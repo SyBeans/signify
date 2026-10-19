@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -8,6 +9,8 @@ import 'package:provider/provider.dart';
 
 import '../config/landmark_config.dart';
 import '../providers/app_state.dart';
+import '../services/sign_model_service.dart';
+import '../services/emotion_model_service.dart';
 import '../services/tts_service.dart';
 import '../theme.dart';
 import '../widgets/landmark_painter.dart';
@@ -43,6 +46,23 @@ class _TranslateScreenState extends State<TranslateScreen> {
   List<LandmarkPoint> _faceLandmarks = [];
   List<LandmarkPoint> _handLandmarks = [];
 
+  // Models
+  final SignModelService _signService = SignModelService();
+  final EmotionModelService _emotionService = EmotionModelService();
+  bool _modelsReady = false;
+
+  // Time-based Buffer for Sign
+  final List<MapEntry<int, List<double>>> _signBuffer = [];
+  List<double>? _lastSignPositions;
+  final List<double> _signMotionHistory = [];
+  int _signPredictCounter = 0;
+  int _signCooldownUntil = 0;
+  final List<String> _signVoteBuffer = [];
+
+  bool _isEmotionInFlight = false;
+  int _emotionFrameCounter = 0;
+  final List<String> _emotionVoteBuffer = [];
+
   // FPS tracking
   int _framesSinceFps = 0;
   int _lastFpsTime = DateTime.now().millisecondsSinceEpoch;
@@ -51,7 +71,6 @@ class _TranslateScreenState extends State<TranslateScreen> {
   bool get _isFrontCamera =>
       _cameras.isNotEmpty &&
       _cameras[_cameraIndex].lensDirection == CameraLensDirection.front;
-
   bool get _handDetected => _handLandmarks.isNotEmpty;
   bool get _faceDetected => _faceLandmarks.isNotEmpty;
   bool get _cameraReady =>
@@ -60,7 +79,18 @@ class _TranslateScreenState extends State<TranslateScreen> {
   @override
   void initState() {
     super.initState();
+    _loadModels();
     if (widget.isActive) _startCamera();
+  }
+
+  Future<void> _loadModels() async {
+    try {
+      await _signService.load();
+      await _emotionService.load();
+      if (mounted) setState(() => _modelsReady = true);
+    } catch (e) {
+      debugPrint('Model load error: $e');
+    }
   }
 
   @override
@@ -101,11 +131,9 @@ class _TranslateScreenState extends State<TranslateScreen> {
       LandmarkConfig.resolutions[_resIndex],
       enableAudio: false,
     );
-
     try {
       await _controller!.initialize();
     } catch (e) {
-      debugPrint('Camera init failed: $e');
       return;
     }
 
@@ -156,9 +184,7 @@ class _TranslateScreenState extends State<TranslateScreen> {
           image,
           _controller!.description.sensorOrientation,
         );
-      } catch (e) {
-        debugPrint('Hand error: $e');
-      }
+      } catch (_) {}
 
       final faces = await _faceDetector?.detectFacesFromCameraImage(image);
       final faceOut = <LandmarkPoint>[];
@@ -199,10 +225,253 @@ class _TranslateScreenState extends State<TranslateScreen> {
           _handLandmarks = List.from(_handLandmarks);
         });
       }
+
+      if (_modelsReady) {
+        _updateSignStream(image, faceOut);
+        _updateEmotion(image, faceOut);
+      }
     } catch (e) {
       debugPrint('Frame error: $e');
     } finally {
       _isProcessing = false;
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  // SIGN — TIME-BASED NATURAL STREAMING
+  // ═══════════════════════════════════════════════════════════
+  void _updateSignStream(CameraImage image, List<LandmarkPoint> faceOut) {
+    final nowMs = DateTime.now().millisecondsSinceEpoch;
+    final bufferLimitMs = (4.0 * 1000).toInt();
+    _signBuffer.removeWhere((e) => nowMs - e.key > bufferLimitMs);
+
+    if (_handLandmarks.isEmpty) {
+      if (_signBuffer.isNotEmpty) {
+        _signBuffer.clear();
+        _signMotionHistory.clear();
+        _lastSignPositions = null;
+        _signPredictCounter = 0;
+      }
+      return;
+    }
+
+    final frame = List<double>.filled(126, 0.0);
+    final handCount = _handLandmarks.length ~/ 21;
+    for (int h = 0; h < math.min(handCount, 2); h++) {
+      for (int i = 0; i < 21; i++) {
+        final lm = _handLandmarks[h * 21 + i];
+        final base = h * 63 + i * 3;
+        frame[base + 0] = lm.x;
+        frame[base + 1] = lm.y;
+        frame[base + 2] = lm.z;
+      }
+    }
+
+    double motion = 0.0;
+    if (_lastSignPositions != null) {
+      double sumSq = 0.0;
+      for (int i = 0; i < 126; i++) {
+        final d = frame[i] - _lastSignPositions![i];
+        sumSq += d * d;
+      }
+      motion = math.sqrt(sumSq);
+    }
+    _lastSignPositions = frame;
+
+    _signMotionHistory.add(motion);
+    if (_signMotionHistory.length > 10) _signMotionHistory.removeAt(0);
+    final anyMotion = _signMotionHistory.any((m) => m > 0.015);
+
+    if (!anyMotion) {
+      _signBuffer.clear();
+      return;
+    }
+
+    _signBuffer.add(MapEntry(nowMs, frame));
+    if (nowMs < _signCooldownUntil) return;
+
+    _signPredictCounter++;
+    if (_signPredictCounter % 2 != 0) return;
+
+    if (_signBuffer.length < 8) return;
+
+    final tMin = _signBuffer.first.key;
+    final tMax = _signBuffer.last.key;
+    if (tMax <= tMin) return;
+
+    final sampled = <List<double>>[];
+    int bufIdx = 0;
+    for (int i = 0; i < 30; i++) {
+      final targetTs = tMin + ((tMax - tMin) * i / 29).round();
+      while (bufIdx < _signBuffer.length - 1 &&
+          (_signBuffer[bufIdx + 1].key - targetTs).abs() <
+              (_signBuffer[bufIdx].key - targetTs).abs()) {
+        bufIdx++;
+      }
+      sampled.add(_signBuffer[bufIdx].value);
+    }
+
+    final sequence = <List<double>>[];
+    for (int i = 0; i < 30; i++) {
+      final f = List<double>.filled(252, 0.0);
+      for (int j = 0; j < 126; j++) f[j] = sampled[i][j];
+      if (i > 0) {
+        for (int j = 0; j < 126; j++)
+          f[126 + j] = sampled[i][j] - sampled[i - 1][j];
+      }
+      sequence.add(f);
+    }
+
+    final result = _signService.predict(sequence);
+    if (result == null) return;
+    final (label, conf, _) = result;
+
+    if (conf >= 0.50) {
+      _signVoteBuffer.add(label);
+      if (_signVoteBuffer.length > 6) _signVoteBuffer.removeAt(0);
+
+      if (_signVoteBuffer.length == 6) {
+        final counts = <String, int>{};
+        for (final l in _signVoteBuffer) counts[l] = (counts[l] ?? 0) + 1;
+        final winner = counts.entries.reduce(
+          (a, b) => a.value >= b.value ? a : b,
+        );
+
+        if (winner.value >= 4) {
+          final state = context.read<AppState>();
+          if (state.sentence.isEmpty ||
+              state.sentence.last['en'] != winner.key) {
+            state.addToSentence(winner.key, winner.key, state.currentEmotion);
+            state.setSignState(winner.key, conf);
+
+            _signVoteBuffer.clear();
+            _signCooldownUntil = DateTime.now().millisecondsSinceEpoch + 1000;
+
+            // Auto-speak logic
+            if (state.autoSpeak) {
+              TtsService.speak(
+                winner.key,
+                lang: state.speechLanguage,
+                speed: state.speechSpeed,
+              );
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  // EMOTION INFERENCE
+  // ═══════════════════════════════════════════════════════════
+  Future<void> _updateEmotion(
+    CameraImage image,
+    List<LandmarkPoint> faceOut,
+  ) async {
+    if (faceOut.length < 400 || _isEmotionInFlight) return;
+    _emotionFrameCounter++;
+    if (_emotionFrameCounter % 5 != 0) return;
+
+    _isEmotionInFlight = true;
+    try {
+      final preview = <LandmarkPoint>[];
+      for (final lm in faceOut) {
+        if (_isFrontCamera) {
+          preview.add(LandmarkPoint(lm.y, 1.0 - lm.x, lm.z));
+        } else {
+          preview.add(LandmarkPoint(1.0 - lm.y, lm.x, lm.z));
+        }
+      }
+
+      double xMin = preview.map((l) => l.x).reduce(math.min);
+      double xMax = preview.map((l) => l.x).reduce(math.max);
+      double yMin = preview.map((l) => l.y).reduce(math.min);
+      double yMax = preview.map((l) => l.y).reduce(math.max);
+
+      final cx = (xMin + xMax) / 2;
+      final cy = (yMin + yMax) / 2;
+      final size = math.max(xMax - xMin, yMax - yMin) * 1.55;
+      final x0 = (cx - size * 0.50).clamp(0.0, 1.0);
+      final x1 = (cx + size * 0.50).clamp(0.0, 1.0);
+      final y0 = (cy - size * 0.65).clamp(0.0, 1.0);
+      final y1 = (cy + size * 0.35).clamp(0.0, 1.0);
+
+      final yPlane = image.planes[0];
+      final bytes = yPlane.bytes;
+      final rowStride = yPlane.bytesPerRow;
+      final pixelStride = yPlane.bytesPerPixel ?? 1;
+      final raw = List<double>.filled(48 * 48, 0.0);
+
+      for (int yy = 0; yy < 48; yy++) {
+        for (int xx = 0; xx < 48; xx++) {
+          final px = x0 + (xx / 48.0) * (x1 - x0);
+          final py = y0 + (yy / 48.0) * (y1 - y0);
+          double rawX, rawY;
+          if (_isFrontCamera) {
+            rawX = 1.0 - py;
+            rawY = px;
+          } else {
+            rawX = py;
+            rawY = 1.0 - px;
+          }
+          final srcX = (rawX * image.width).toInt().clamp(0, image.width - 1);
+          final srcY = (rawY * image.height).toInt().clamp(0, image.height - 1);
+          final idx = srcY * rowStride + srcX * pixelStride;
+          if (idx >= 0 && idx < bytes.length)
+            raw[yy * 48 + xx] = bytes[idx] / 255.0;
+        }
+      }
+
+      final lmVec = <double>[];
+      for (final lm in preview) {
+        lmVec.add(lm.x);
+        lmVec.add(lm.y);
+      }
+
+      final result = _emotionService.predict(raw, lmVec);
+      if (result != null) {
+        final (_, _, rawProbs) = result;
+        final weighted = List<double>.filled(4, 0.0);
+        double wSum = 0.0;
+        final weights = [1.0, 0.50, 1.0, 1.50];
+        for (int i = 0; i < 4; i++) {
+          weighted[i] = rawProbs[i] * weights[i];
+          wSum += weighted[i];
+        }
+        if (wSum > 0) {
+          for (int i = 0; i < 4; i++) weighted[i] /= wSum;
+        }
+
+        int frameIdx = 0;
+        double frameTop = weighted[0];
+        for (int i = 1; i < 4; i++) {
+          if (weighted[i] > frameTop) {
+            frameTop = weighted[i];
+            frameIdx = i;
+          }
+        }
+        final frameLabel = EmotionModelService.classNames[frameIdx];
+
+        if (frameTop >= 0.40) {
+          _emotionVoteBuffer.add(frameLabel);
+          if (_emotionVoteBuffer.length > 8) _emotionVoteBuffer.removeAt(0);
+        }
+
+        if (_emotionVoteBuffer.isNotEmpty) {
+          final counts = <String, int>{};
+          for (final lbl in _emotionVoteBuffer)
+            counts[lbl] = (counts[lbl] ?? 0) + 1;
+          final winner = counts.entries.reduce(
+            (a, b) => a.value >= b.value ? a : b,
+          );
+
+          if (mounted) {
+            context.read<AppState>().setEmotion(winner.key, frameTop);
+          }
+        }
+      }
+    } finally {
+      _isEmotionInFlight = false;
     }
   }
 
@@ -236,6 +505,8 @@ class _TranslateScreenState extends State<TranslateScreen> {
     _controller?.dispose();
     _faceDetector?.dispose();
     _handPlugin?.dispose();
+    _signService.dispose();
+    _emotionService.dispose();
     super.dispose();
   }
 
@@ -252,12 +523,11 @@ class _TranslateScreenState extends State<TranslateScreen> {
         bottom: false,
         child: Column(
           children: [
-            // ── Top row: status pill on left, 4 compact chips on right ──
+            // ── Top row ──
             Padding(
               padding: const EdgeInsets.fromLTRB(20, 16, 16, 12),
               child: Row(
                 children: [
-                  // Status pill
                   Container(
                     padding: const EdgeInsets.symmetric(
                       horizontal: 10,
@@ -294,8 +564,6 @@ class _TranslateScreenState extends State<TranslateScreen> {
                     ),
                   ),
                   const Spacer(),
-
-                  // 1. FPS
                   _miniChip(
                     child: Text(
                       '${_fps.toStringAsFixed(0)}fps',
@@ -307,8 +575,6 @@ class _TranslateScreenState extends State<TranslateScreen> {
                     ),
                   ),
                   const SizedBox(width: 6),
-
-                  // 2. Cam indicator (tappable — flips camera)
                   _miniIconChip(
                     onTap: _switchCamera,
                     child: Text(
@@ -321,8 +587,6 @@ class _TranslateScreenState extends State<TranslateScreen> {
                     ),
                   ),
                   const SizedBox(width: 6),
-
-                  // 3. Resolution (tappable — cycles)
                   _miniIconChip(
                     onTap: () => _applyResolution(
                       (_resIndex + 1) % LandmarkConfig.resolutions.length,
@@ -337,67 +601,33 @@ class _TranslateScreenState extends State<TranslateScreen> {
                     ),
                   ),
                   const SizedBox(width: 6),
-
-                  // 4. Menu
                   PopupMenuButton<String>(
-                    tooltip: 'Options',
-                    offset: const Offset(0, 40),
-                    padding: EdgeInsets.zero,
-                    onSelected: (value) {
-                      switch (value) {
-                        case 'low':
-                          _applyResolution(0);
-                          break;
-                        case 'med':
-                          _applyResolution(1);
-                          break;
-                        case 'high':
-                          _applyResolution(2);
-                          break;
-                        case 'flip':
-                          _switchCamera();
-                          break;
-                      }
+                    onSelected: (v) {
+                      if (v == 'low') _applyResolution(0);
+                      if (v == 'med') _applyResolution(1);
+                      if (v == 'high') _applyResolution(2);
+                      if (v == 'flip') _switchCamera();
                     },
                     itemBuilder: (context) => [
-                      const PopupMenuItem<String>(
-                        enabled: false,
-                        height: 28,
-                        child: Text(
-                          'CAMERA RESOLUTION',
-                          style: TextStyle(
-                            fontSize: 10,
-                            fontWeight: FontWeight.w800,
-                            letterSpacing: 1.2,
-                            color: Colors.black54,
-                          ),
-                        ),
-                      ),
-                      CheckedPopupMenuItem<String>(
+                      CheckedPopupMenuItem(
                         value: 'low',
                         checked: _resIndex == 0,
-                        child: const Text('Low  (240p)'),
+                        child: const Text('Low (240p)'),
                       ),
-                      CheckedPopupMenuItem<String>(
+                      CheckedPopupMenuItem(
                         value: 'med',
                         checked: _resIndex == 1,
-                        child: const Text('Medium  (480p)'),
+                        child: const Text('Medium (480p)'),
                       ),
-                      CheckedPopupMenuItem<String>(
+                      CheckedPopupMenuItem(
                         value: 'high',
                         checked: _resIndex == 2,
-                        child: const Text('High  (720p)'),
+                        child: const Text('High (720p)'),
                       ),
                       const PopupMenuDivider(),
-                      const PopupMenuItem<String>(
+                      const PopupMenuItem(
                         value: 'flip',
-                        child: Row(
-                          children: [
-                            Icon(Icons.cameraswitch, size: 18),
-                            SizedBox(width: 10),
-                            Text('Flip camera'),
-                          ],
-                        ),
+                        child: Text('Flip camera'),
                       ),
                     ],
                     child: Container(
@@ -418,7 +648,7 @@ class _TranslateScreenState extends State<TranslateScreen> {
               ),
             ),
 
-            // ── Chips row: HAND | FACE | Emotion (restored) ──
+            // ── Chips row ──
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 20),
               child: Row(
@@ -426,39 +656,45 @@ class _TranslateScreenState extends State<TranslateScreen> {
                   _detectChip('HAND', _handDetected),
                   const SizedBox(width: 8),
                   _detectChip('FACE', _faceDetected),
-                  const SizedBox(width: 8),
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 10,
-                      vertical: 6,
-                    ),
-                    decoration: BoxDecoration(
-                      color: Colors.white.withOpacity(0.08),
-                      borderRadius: BorderRadius.circular(20),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(emoData.$1, style: const TextStyle(fontSize: 12)),
-                        const SizedBox(width: 6),
-                        Text(
-                          emo.toUpperCase(),
-                          style: TextStyle(
-                            fontSize: 11,
-                            fontWeight: FontWeight.w800,
-                            letterSpacing: 0.6,
-                            color: emoData.$2,
+                  // FIX: Show emotion toggle
+                  if (state.showEmotion) ...[
+                    const SizedBox(width: 8),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 6,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withOpacity(0.08),
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            emoData.$1,
+                            style: const TextStyle(fontSize: 12),
                           ),
-                        ),
-                      ],
+                          const SizedBox(width: 6),
+                          Text(
+                            emo.toUpperCase(),
+                            style: TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w800,
+                              letterSpacing: 0.6,
+                              color: emoData.$2,
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
-                  ),
+                  ],
                 ],
               ),
             ),
             const SizedBox(height: 14),
 
-            // ── Live camera preview ──
+            // ── Live camera preview (UNCHANGED) ──
             Expanded(
               flex: 5,
               child: Container(
@@ -475,7 +711,6 @@ class _TranslateScreenState extends State<TranslateScreen> {
                           children: [
                             FittedBox(
                               fit: BoxFit.cover,
-                              clipBehavior: Clip.hardEdge,
                               child: SizedBox(
                                 width: _controller!.value.previewSize!.height,
                                 height: _controller!.value.previewSize!.width,
@@ -515,72 +750,43 @@ class _TranslateScreenState extends State<TranslateScreen> {
             ),
             const SizedBox(height: 14),
 
-            // ── Top-3 predictions (static for now) ──
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20),
-              child: Row(
-                children: [
-                  _predChip('Doctor', 87, primary: true),
-                  const SizedBox(width: 8),
-                  _predChip('Nurse', 6),
-                  const SizedBox(width: 8),
-                  _predChip('Help', 4),
-                ],
-              ),
-            ),
-            const SizedBox(height: 14),
-
-            // ── Confidence bar (static) ──
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    'CONFIDENCE',
-                    style: TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.w800,
-                      letterSpacing: 1.2,
-                      color: Colors.white70,
-                    ),
-                  ),
-                  const SizedBox(height: 6),
-                  ClipRRect(
-                    borderRadius: BorderRadius.circular(4),
-                    child: LinearProgressIndicator(
-                      value: 0.87,
-                      minHeight: 5,
-                      backgroundColor: Colors.white.withOpacity(0.1),
-                      valueColor: const AlwaysStoppedAnimation(AppColors.green),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 14),
-
             // ── Sentence builder ──
             Expanded(
               flex: 6,
               child: Container(
                 width: double.infinity,
-                decoration: const BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+                decoration: BoxDecoration(
+                  color: Theme.of(context).cardColor,
+                  borderRadius: const BorderRadius.vertical(
+                    top: Radius.circular(24),
+                  ),
                 ),
                 padding: EdgeInsets.fromLTRB(20, 16, 20, 12 + bottomInset),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text(
-                      'SENTENCE BUILDER',
-                      style: TextStyle(
-                        fontSize: 10,
-                        fontWeight: FontWeight.w800,
-                        letterSpacing: 1.5,
-                        color: AppColors.textSoft,
-                      ),
+                    Row(
+                      children: [
+                        Text(
+                          'SENTENCE BUILDER',
+                          style: TextStyle(
+                            fontSize: 10,
+                            fontWeight: FontWeight.w800,
+                            letterSpacing: 1.5,
+                            color: AppColors.textSoft,
+                          ),
+                        ),
+                        const Spacer(),
+                        if (state.sentence.isNotEmpty)
+                          Text(
+                            '${(state.lastSignConfidence * 100).toStringAsFixed(0)}% conf',
+                            style: const TextStyle(
+                              fontSize: 11,
+                              color: AppColors.green,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                      ],
                     ),
                     const SizedBox(height: 10),
 
@@ -606,11 +812,6 @@ class _TranslateScreenState extends State<TranslateScreen> {
                               ),
                             ),
                           ),
-                          const SizedBox(width: 10),
-                          Text(
-                            '${(state.lastSignConfidence * 100).toStringAsFixed(0)}% confidence',
-                            style: AppText.small,
-                          ),
                         ],
                       ),
                     const SizedBox(height: 10),
@@ -625,67 +826,84 @@ class _TranslateScreenState extends State<TranslateScreen> {
                                     'Start signing to build a sentence…',
                                     style: TextStyle(color: AppColors.textSoft),
                                   )
-                                : Text.rich(
-                                    TextSpan(
-                                      children: [
-                                        for (
-                                          int i = 0;
-                                          i < state.sentence.length;
-                                          i++
-                                        )
+                                : Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      // FIX: Display Language Handling
+                                      if (state.displayLanguage == 'eng' ||
+                                          state.displayLanguage == 'both')
+                                        Text.rich(
                                           TextSpan(
-                                            text: '${state.sentence[i]['en']} ',
+                                            children: [
+                                              for (
+                                                int i = 0;
+                                                i < state.sentence.length;
+                                                i++
+                                              )
+                                                TextSpan(
+                                                  text:
+                                                      '${state.sentence[i]['en']} ',
+                                                  style: TextStyle(
+                                                    fontSize: 22,
+                                                    fontWeight: FontWeight.w800,
+                                                    color:
+                                                        Theme.of(context)
+                                                            .textTheme
+                                                            .bodyLarge
+                                                            ?.color ??
+                                                        AppColors.textDark,
+                                                    backgroundColor:
+                                                        i ==
+                                                            state
+                                                                    .sentence
+                                                                    .length -
+                                                                1
+                                                        ? AppColors.greenSoft
+                                                        : null,
+                                                  ),
+                                                ),
+                                            ],
+                                          ),
+                                        ),
+
+                                      // Show Filipino if 'fil' or 'both'
+                                      if (state.displayLanguage == 'fil' ||
+                                          state.displayLanguage == 'both')
+                                        Padding(
+                                          padding: const EdgeInsets.only(
+                                            top: 8,
+                                          ),
+                                          child: Text(
+                                            state.filipinoSentence,
                                             style: TextStyle(
-                                              fontSize: 22,
-                                              fontWeight: FontWeight.w800,
-                                              color: AppColors.textDark,
-                                              backgroundColor:
-                                                  i == state.sentence.length - 1
-                                                  ? AppColors.greenSoft
-                                                  : null,
+                                              fontSize:
+                                                  state.displayLanguage == 'fil'
+                                                  ? 22
+                                                  : 15,
+                                              fontWeight:
+                                                  state.displayLanguage == 'fil'
+                                                  ? FontWeight.w800
+                                                  : FontWeight.normal,
+                                              color:
+                                                  state.displayLanguage == 'fil'
+                                                  ? (Theme.of(context)
+                                                            .textTheme
+                                                            .bodyLarge
+                                                            ?.color ??
+                                                        AppColors.textDark)
+                                                  : AppColors.textSoft,
                                             ),
                                           ),
-                                      ],
-                                    ),
+                                        ),
+                                    ],
                                   ),
-                            const SizedBox(height: 8),
-                            if (state.sentence.isNotEmpty)
-                              Text(
-                                state.filipinoSentence,
-                                style: const TextStyle(
-                                  fontSize: 15,
-                                  color: AppColors.textSoft,
-                                ),
-                              ),
-                            const SizedBox(height: 10),
-                            if (state.sentence.isNotEmpty)
-                              Row(
-                                children: [
-                                  Text(
-                                    emoData.$1,
-                                    style: const TextStyle(fontSize: 14),
-                                  ),
-                                  const SizedBox(width: 6),
-                                  Text(
-                                    emo,
-                                    style: TextStyle(
-                                      fontSize: 12,
-                                      fontWeight: FontWeight.w700,
-                                      color: emoData.$2,
-                                    ),
-                                  ),
-                                  const Text(
-                                    '  ·  grammatical marker: none',
-                                    style: AppText.small,
-                                  ),
-                                ],
-                              ),
                           ],
                         ),
                       ),
                     ),
 
-                    // ── Actions ──
+                    // Actions
                     Row(
                       children: [
                         _iconBtn(
@@ -705,13 +923,17 @@ class _TranslateScreenState extends State<TranslateScreen> {
                                 borderRadius: BorderRadius.circular(14),
                               ),
                             ),
-                            onPressed: () => TtsService.speak(
-                              state.speechLanguage == 'fil'
+                            // FIX: Speech Speed now passed correctly
+                            onPressed: () {
+                              final textToSpeak = state.speechLanguage == 'fil'
                                   ? state.filipinoSentence
-                                  : state.englishSentence,
-                              lang: state.speechLanguage,
-                              speed: state.speechSpeed,
-                            ),
+                                  : state.englishSentence;
+                              TtsService.speak(
+                                textToSpeak,
+                                lang: state.speechLanguage,
+                                speed: state.speechSpeed,
+                              );
+                            },
                             icon: const Icon(Icons.volume_up, size: 18),
                             label: const Text(
                               'Speak Sentence',
@@ -721,10 +943,18 @@ class _TranslateScreenState extends State<TranslateScreen> {
                         ),
                         const SizedBox(width: 8),
                         _iconBtn(
-                          Icons.copy_rounded,
-                          AppColors.textDark,
-                          border: true,
-                          onTap: () {},
+                          Icons.save_outlined,
+                          AppColors.blue,
+                          bg: AppColors.blueSoft,
+                          onTap: () async {
+                            await state.saveSentence();
+                            if (context.mounted)
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(
+                                  content: Text('Saved to History!'),
+                                ),
+                              );
+                          },
                         ),
                         const SizedBox(width: 8),
                         _iconBtn(
@@ -745,6 +975,7 @@ class _TranslateScreenState extends State<TranslateScreen> {
     );
   }
 
+  // ── Helpers (Unchanged) ──
   Widget _placeholder() {
     return Stack(
       children: [
@@ -817,37 +1048,6 @@ class _TranslateScreenState extends State<TranslateScreen> {
     ),
   );
 
-  Widget _predChip(String label, int pct, {bool primary = false}) => Expanded(
-    child: Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      decoration: BoxDecoration(
-        color: primary ? AppColors.blue : Colors.white.withOpacity(0.08),
-        borderRadius: BorderRadius.circular(24),
-      ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Text(
-            label,
-            style: const TextStyle(
-              color: Colors.white,
-              fontWeight: FontWeight.w700,
-              fontSize: 13,
-            ),
-          ),
-          const SizedBox(width: 6),
-          Text(
-            '· $pct%',
-            style: TextStyle(
-              color: Colors.white.withOpacity(0.7),
-              fontSize: 12,
-            ),
-          ),
-        ],
-      ),
-    ),
-  );
-
   Widget _iconBtn(
     IconData icon,
     Color color, {
@@ -861,7 +1061,7 @@ class _TranslateScreenState extends State<TranslateScreen> {
       width: 44,
       height: 44,
       decoration: BoxDecoration(
-        color: bg ?? Colors.white,
+        color: bg ?? Theme.of(context).cardColor,
         borderRadius: BorderRadius.circular(12),
         border: border ? Border.all(color: AppColors.border) : null,
       ),

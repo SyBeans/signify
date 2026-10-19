@@ -1,14 +1,15 @@
-
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:tflite_flutter/tflite_flutter.dart';
 
-/// Runs emotion_model.tflite — inputs: (1, 48, 48, 1) + (1, 936) → output (1, 4)
 class EmotionModelService {
   Interpreter? _interpreter;
   bool _loaded = false;
 
   static const int imgSize = 48;
   static const int numLandmarks = 936;
+  static const int numClasses = 4;
+
   static const List<String> classNames = [
     'Positive',
     'Negative',
@@ -20,55 +21,55 @@ class EmotionModelService {
 
   Future<void> load() async {
     if (_loaded) return;
-
     final modelData = await rootBundle.load(
       'assets/models/emotion_model.tflite',
     );
     _interpreter = Interpreter.fromBuffer(modelData.buffer.asUint8List());
-
-    print('Emotion model loaded:');
-    print(
-      '  inputs:  ${_interpreter!.getInputTensor(0).shape} / ${_interpreter!.getInputTensor(1).shape}',
-    );
-    print('  outputs: ${_interpreter!.getOutputTensor(0).shape}');
-
+    _interpreter!.allocateTensors();
     _loaded = true;
   }
 
-  /// Predict emotion.
-  /// [image] must be a flat list of 48*48 = 2304 floats in [0,1].
-  /// [landmarks] must be 936 floats.
-  /// Returns (label, confidence, allProbs).
   (String, double, List<double>)? predict(
     List<double> image,
     List<double> landmarks,
   ) {
-    if (!_loaded) return null;
-    if (image.length != imgSize * imgSize) return null;
-    if (landmarks.length != numLandmarks) return null;
+    final interp = _interpreter;
+    if (!_loaded || interp == null) return null;
 
-    // Input 1: image (1, 48, 48, 1)
-    final imgTensor = image.reshape([1, imgSize, imgSize, 1]);
+    try {
+      final in0 = interp.getInputTensor(0);
+      final in1 = interp.getInputTensor(1);
+      final out0 = interp.getOutputTensor(0);
 
-    // Input 2: landmarks (1, 936)
-    final lmTensor = [landmarks]; // wrap in batch
+      final imgInput = image.reshape([1, imgSize, imgSize, 1]);
+      final lmInput = landmarks.reshape([1, numLandmarks]);
 
-    // Output: (1, 4)
-    final output = List.filled(4, 0.0).reshape([1, 4]);
+      in0.setTo(imgInput);
+      in1.setTo(lmInput);
 
-    _interpreter!.run([imgTensor, lmTensor], [output]);
+      interp.invoke();
 
-    final probs = List<double>.from(output[0]);
-    int bestIdx = 0;
-    double bestProb = probs[0];
-    for (int i = 1; i < probs.length; i++) {
-      if (probs[i] > bestProb) {
-        bestProb = probs[i];
-        bestIdx = i;
+      final outData = out0.data;
+      final probs = List<double>.from(
+        outData.buffer.asFloat32List(
+          outData.offsetInBytes,
+          outData.lengthInBytes ~/ 4,
+        ),
+      );
+
+      int bestIdx = 0;
+      double bestProb = probs[0];
+      for (int i = 1; i < probs.length; i++) {
+        if (probs[i] > bestProb) {
+          bestProb = probs[i];
+          bestIdx = i;
+        }
       }
+      return (classNames[bestIdx], bestProb, probs);
+    } catch (e) {
+      debugPrint('EMO-PRED error: $e');
+      return null;
     }
-
-    return (classNames[bestIdx], bestProb, probs);
   }
 
   void dispose() {

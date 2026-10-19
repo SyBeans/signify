@@ -67,42 +67,72 @@ class _EmergencySetupScreenState extends State<EmergencySetupScreen> {
           ),
           const SizedBox(height: 24),
 
-          const Text('EMERGENCY CONTACTS · MAX 3', style: AppText.label),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Text('EMERGENCY CONTACTS · MAX 3', style: AppText.label),
+              if (s.contacts.length < 3)
+                GestureDetector(
+                  onTap: () => _showContactDialog(context, s, null),
+                  child: const Text(
+                    '+ Add Contact',
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                      color: AppColors.blue,
+                    ),
+                  ),
+                ),
+            ],
+          ),
           const SizedBox(height: 10),
+
+          if (s.contacts.isEmpty)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 20),
+              child: Center(
+                child: Text('No contacts added yet.', style: AppText.small),
+              ),
+            ),
+
           ...s.contacts.map(
             (c) => Padding(
               padding: const EdgeInsets.only(bottom: 8),
-              child: Container(
-                padding: const EdgeInsets.all(14),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(14),
-                  border: Border.all(color: AppColors.border),
-                ),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            c.name,
-                            style: const TextStyle(
-                              fontWeight: FontWeight.w700,
-                              fontSize: 14,
+              child: InkWell(
+                onTap: () => _showContactDialog(context, s, c),
+                borderRadius: BorderRadius.circular(14),
+                child: Container(
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(color: AppColors.border),
+                  ),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              c.name,
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w700,
+                                fontSize: 14,
+                              ),
                             ),
-                          ),
-                          const SizedBox(height: 3),
-                          Text(c.phone, style: AppText.small),
-                        ],
+                            const SizedBox(height: 3),
+                            Text(c.phone, style: AppText.small),
+                          ],
+                        ),
                       ),
-                    ),
-                    const Icon(
-                      Icons.edit_outlined,
-                      size: 18,
-                      color: AppColors.orange,
-                    ),
-                  ],
+                      const Icon(
+                        Icons.edit_outlined,
+                        size: 18,
+                        color: AppColors.orange,
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ),
@@ -141,9 +171,15 @@ class _EmergencySetupScreenState extends State<EmergencySetupScreen> {
                 borderRadius: BorderRadius.circular(14),
               ),
             ),
-            onPressed: () {
+            onPressed: () async {
+              // Save user name
               s.setUserName(_name.text);
-              Navigator.pop(context);
+
+              // Contacts are saved immediately when edited,
+              // but we ensure everything is synced before popping.
+              await s.saveContacts(s.contacts);
+
+              if (context.mounted) Navigator.pop(context);
             },
             icon: const Icon(Icons.save_outlined, size: 18),
             label: const Text(
@@ -153,6 +189,84 @@ class _EmergencySetupScreenState extends State<EmergencySetupScreen> {
           ),
         ],
       ),
+    );
+  }
+
+  // Dialog for Adding/Editing/Deleting a contact
+  void _showContactDialog(BuildContext context, AppState s, Contact? contact) {
+    final isEditing = contact != null;
+    final nameCtrl = TextEditingController(text: contact?.name ?? '');
+    final phoneCtrl = TextEditingController(text: contact?.phone ?? '');
+
+    showDialog<void>(
+      context: context,
+      builder: (ctx) {
+        return AlertDialog(
+          title: Text(isEditing ? 'Edit Contact' : 'Add Contact'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: nameCtrl,
+                textCapitalization: TextCapitalization.words,
+                decoration: const InputDecoration(
+                  labelText: 'Name',
+                  hintText: 'e.g. Mom',
+                ),
+              ),
+              const SizedBox(height: 10),
+              TextField(
+                controller: phoneCtrl,
+                keyboardType: TextInputType.phone,
+                decoration: const InputDecoration(
+                  labelText: 'Phone Number',
+                  hintText: '+63 912 345 6789',
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            if (isEditing)
+              TextButton(
+                onPressed: () async {
+                  // Delete logic
+                  final newList = List<Contact>.from(s.contacts)
+                    ..remove(contact);
+                  await s.saveContacts(newList);
+                  if (ctx.mounted) Navigator.pop(ctx);
+                },
+                child: const Text(
+                  'Delete',
+                  style: TextStyle(color: AppColors.red),
+                ),
+              ),
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () async {
+                final name = nameCtrl.text.trim();
+                final phone = phoneCtrl.text.trim();
+                if (name.isEmpty || phone.isEmpty) return; // Basic validation
+
+                final newList = List<Contact>.from(s.contacts);
+                if (isEditing) {
+                  // Edit logic
+                  final idx = newList.indexOf(contact);
+                  newList[idx] = Contact(name: name, phone: phone);
+                } else {
+                  // Add logic
+                  newList.add(Contact(name: name, phone: phone));
+                }
+                await s.saveContacts(newList);
+                if (ctx.mounted) Navigator.pop(ctx);
+              },
+              child: Text(isEditing ? 'Update' : 'Add'),
+            ),
+          ],
+        );
+      },
     );
   }
 

@@ -97,9 +97,46 @@ class SettingsScreen extends StatelessWidget {
           const SizedBox(height: 24),
 
           _section('DATA'),
-          _NavTile(title: 'Clear history', onTap: () => s.history.clear()),
+          _NavTile(
+            title: 'Clear history',
+            onTap: () => _showClearHistoryDialog(context, s),
+          ),
           const SizedBox(height: 10),
-          _NavTile(title: 'About Signify', onTap: () {}),
+          _NavTile(
+            title: 'About Signify',
+            onTap: () {
+              // Blank for now
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showClearHistoryDialog(BuildContext context, AppState s) {
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Clear History?'),
+        content: const Text(
+          'This will permanently delete all your saved translations.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: AppColors.red),
+            onPressed: () {
+              s.clearHistory();
+              Navigator.pop(ctx);
+              ScaffoldMessenger.of(
+                context,
+              ).showSnackBar(const SnackBar(content: Text('History cleared')));
+            },
+            child: const Text('Clear All'),
+          ),
         ],
       ),
     );
@@ -128,7 +165,7 @@ class _SwitchTile extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: Theme.of(context).cardColor,
         borderRadius: BorderRadius.circular(14),
         border: Border.all(color: AppColors.border),
       ),
@@ -140,9 +177,10 @@ class _SwitchTile extends StatelessWidget {
               children: [
                 Text(
                   title,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontWeight: FontWeight.w700,
                     fontSize: 14,
+                    color: Theme.of(context).textTheme.bodyLarge?.color,
                   ),
                 ),
                 if (subtitle != null) ...[
@@ -182,7 +220,7 @@ class _Segmented extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: Theme.of(context).cardColor,
         borderRadius: BorderRadius.circular(14),
         border: Border.all(color: AppColors.border),
       ),
@@ -191,7 +229,11 @@ class _Segmented extends StatelessWidget {
         children: [
           Text(
             title,
-            style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14),
+            style: TextStyle(
+              fontWeight: FontWeight.w700,
+              fontSize: 14,
+              color: Theme.of(context).textTheme.bodyLarge?.color,
+            ),
           ),
           if (subtitle != null) ...[
             const SizedBox(height: 2),
@@ -201,7 +243,7 @@ class _Segmented extends StatelessWidget {
           Container(
             padding: const EdgeInsets.all(3),
             decoration: BoxDecoration(
-              color: AppColors.bg,
+              color: Theme.of(context).scaffoldBackgroundColor,
               borderRadius: BorderRadius.circular(10),
             ),
             child: Row(
@@ -213,7 +255,11 @@ class _Segmented extends StatelessWidget {
                     child: Container(
                       padding: const EdgeInsets.symmetric(vertical: 8),
                       decoration: BoxDecoration(
-                        color: active ? Colors.white : Colors.transparent,
+                        color: active
+                            ? (Theme.of(context).brightness == Brightness.dark
+                                  ? AppColors.navyLight
+                                  : Colors.white)
+                            : Colors.transparent,
                         borderRadius: BorderRadius.circular(8),
                         boxShadow: active
                             ? [
@@ -232,7 +278,7 @@ class _Segmented extends StatelessWidget {
                           fontSize: 12,
                           fontWeight: FontWeight.w700,
                           color: active
-                              ? AppColors.textDark
+                              ? (Theme.of(context).textTheme.bodyLarge?.color)
                               : AppColors.textSoft,
                         ),
                       ),
@@ -262,7 +308,7 @@ class _NavTile extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.all(14),
         decoration: BoxDecoration(
-          color: Colors.white,
+          color: Theme.of(context).cardColor,
           borderRadius: BorderRadius.circular(14),
           border: Border.all(color: AppColors.border),
         ),
@@ -274,9 +320,10 @@ class _NavTile extends StatelessWidget {
                 children: [
                   Text(
                     title,
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontWeight: FontWeight.w700,
                       fontSize: 14,
+                      color: Theme.of(context).textTheme.bodyLarge?.color,
                     ),
                   ),
                   if (subtitle != null) ...[

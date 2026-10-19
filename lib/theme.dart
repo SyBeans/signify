@@ -67,3 +67,26 @@ ThemeData buildSignifyTheme() => ThemeData(
     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
   ),
 );
+
+// ADDED: Dark Theme
+ThemeData buildSignifyDarkTheme() => ThemeData(
+  useMaterial3: true,
+  brightness: Brightness.dark,
+  colorScheme: ColorScheme.fromSeed(
+    seedColor: AppColors.blue,
+    brightness: Brightness.dark,
+  ),
+  scaffoldBackgroundColor: const Color(0xFF0F172A), // Navy dark
+  appBarTheme: const AppBarTheme(
+    centerTitle: false,
+    elevation: 0,
+    backgroundColor: Colors.transparent,
+    foregroundColor: Colors.white,
+  ),
+  cardTheme: CardThemeData(
+    elevation: 0,
+    color: const Color(0xFF1E293B),
+    margin: EdgeInsets.zero,
+    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+  ),
+);

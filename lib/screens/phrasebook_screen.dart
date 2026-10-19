@@ -14,13 +14,8 @@ class PhrasebookScreen extends StatefulWidget {
 
 class _PhrasebookScreenState extends State<PhrasebookScreen> {
   String _category = 'All';
-  final Set<String> _favs = {};
-
-  // Tap flash (whole row highlights for ~800ms)
   String? _lastTapped;
   Timer? _tapClearTimer;
-
-  // Speaking state (which phrase is currently being spoken)
   String? _speakingPhrase;
   Timer? _speakClearTimer;
 
@@ -41,11 +36,7 @@ class _PhrasebookScreenState extends State<PhrasebookScreen> {
 
   Future<void> _speakPhrase(AppState state, Phrase p) async {
     final text = state.speechLanguage == 'fil' ? p.filipino : p.english;
-
-    // Show speaking state on this phrase
     setState(() => _speakingPhrase = p.english);
-
-    // Estimate duration: ~80 ms per character, min 1.5s
     final estimated = Duration(
       milliseconds: (text.length * 80).clamp(1500, 8000),
     );
@@ -56,12 +47,10 @@ class _PhrasebookScreenState extends State<PhrasebookScreen> {
       speed: state.speechSpeed,
     );
 
-    // Clear speaking state after the estimate
     _speakClearTimer?.cancel();
     _speakClearTimer = Timer(estimated, () {
-      if (mounted && _speakingPhrase == p.english) {
+      if (mounted && _speakingPhrase == p.english)
         setState(() => _speakingPhrase = null);
-      }
     });
   }
 
@@ -78,12 +67,29 @@ class _PhrasebookScreenState extends State<PhrasebookScreen> {
       'School',
     ];
 
-    final filtered = _category == 'All'
-        ? phrasebookData
-        : phrasebookData.where((p) => p.category == _category).toList();
+    // 1. Create a dynamic copy of the phrasebook list
+    final dynamicPhrases = List<Phrase>.from(phrasebookData);
 
-    final favorites = filtered.where((p) => _favs.contains(p.english)).toList();
-    final rest = filtered.where((p) => !_favs.contains(p.english)).toList();
+    // 2. Inject the dynamic user name
+    final safeName = state.userName.trim().isEmpty
+        ? 'Jonathan'
+        : state.userName.trim();
+    dynamicPhrases.add(
+      Phrase('I am $safeName', 'Ako si $safeName', 'Greetings'),
+    );
+
+    // 3. Filter the dynamic list
+    final filtered = _category == 'All'
+        ? dynamicPhrases
+        : dynamicPhrases.where((p) => p.category == _category).toList();
+
+    // 4. Separate into favorites and rest
+    final favorites = filtered
+        .where((p) => state.phrasebookFavs.contains(p.english))
+        .toList();
+    final rest = filtered
+        .where((p) => !state.phrasebookFavs.contains(p.english))
+        .toList();
 
     final grouped = <String, List<Phrase>>{};
     for (final p in rest) {
@@ -177,7 +183,7 @@ class _PhrasebookScreenState extends State<PhrasebookScreen> {
                           isFlashing: _lastTapped == p.english,
                           isSpeaking: _speakingPhrase == p.english,
                           onTap: () => _flashTap(p.english),
-                          onFav: () => setState(() => _favs.remove(p.english)),
+                          onFav: () => state.togglePhrasebookFav(p.english),
                           onSpeak: () => _speakPhrase(state, p),
                         ),
                       ),
@@ -200,17 +206,11 @@ class _PhrasebookScreenState extends State<PhrasebookScreen> {
                         padding: const EdgeInsets.only(bottom: 10),
                         child: _PhraseItem(
                           phrase: p,
-                          fav: _favs.contains(p.english),
+                          fav: false,
                           isFlashing: _lastTapped == p.english,
                           isSpeaking: _speakingPhrase == p.english,
                           onTap: () => _flashTap(p.english),
-                          onFav: () => setState(() {
-                            if (_favs.contains(p.english)) {
-                              _favs.remove(p.english);
-                            } else {
-                              _favs.add(p.english);
-                            }
-                          }),
+                          onFav: () => state.togglePhrasebookFav(p.english),
                           onSpeak: () => _speakPhrase(state, p),
                         ),
                       ),
@@ -285,13 +285,8 @@ class _PhraseItem extends StatelessWidget {
                   ],
                 ),
               ),
-
-              // ── Play button with speaking state ──
               _SpeakButton(isSpeaking: isSpeaking, onTap: onSpeak),
-
               const SizedBox(width: 8),
-
-              // Favorite star
               GestureDetector(
                 onTap: onFav,
                 behavior: HitTestBehavior.opaque,
@@ -312,13 +307,10 @@ class _PhraseItem extends StatelessWidget {
   }
 }
 
-/// Speak button that animates (pulses + changes to blue) while speaking.
 class _SpeakButton extends StatefulWidget {
   final bool isSpeaking;
   final VoidCallback onTap;
-
   const _SpeakButton({required this.isSpeaking, required this.onTap});
-
   @override
   State<_SpeakButton> createState() => _SpeakButtonState();
 }
@@ -357,16 +349,13 @@ class _SpeakButtonState extends State<_SpeakButton>
   @override
   Widget build(BuildContext context) {
     final speaking = widget.isSpeaking;
-
     return GestureDetector(
       onTap: widget.onTap,
       behavior: HitTestBehavior.opaque,
       child: AnimatedBuilder(
         animation: _pulseController,
         builder: (context, child) {
-          // Scale goes from 1.0 to 1.15 while speaking
           final scale = speaking ? 1.0 + 0.15 * _pulseController.value : 1.0;
-
           return Transform.scale(
             scale: scale,
             child: AnimatedContainer(
@@ -374,7 +363,6 @@ class _SpeakButtonState extends State<_SpeakButton>
               width: 40,
               height: 40,
               decoration: BoxDecoration(
-                // Blue circle while speaking, off-white otherwise
                 color: speaking ? AppColors.blue : AppColors.bg,
                 shape: BoxShape.circle,
                 border: Border.all(
@@ -392,10 +380,7 @@ class _SpeakButtonState extends State<_SpeakButton>
                     : null,
               ),
               child: Icon(
-                speaking
-                    ? Icons
-                          .volume_up_rounded // active icon
-                    : Icons.play_arrow_rounded, // idle icon
+                speaking ? Icons.volume_up_rounded : Icons.play_arrow_rounded,
                 size: 20,
                 color: speaking ? Colors.white : AppColors.textDark,
               ),

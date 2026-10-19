@@ -12,7 +12,7 @@ const List<Phrase> phrasebookData = [
   Phrase('Call the police!', 'Tumawag ng pulis!', 'Emergency'),
 
   Phrase('Good day', 'Magandang araw', 'Greetings'),
-  Phrase('I am Jonathan', 'Ako si Jonathan', 'Greetings'),
+  // 'I am Jonathan' is removed from here, it will be added dynamically based on user setup.
   Phrase('Good morning', 'Magandang umaga', 'Greetings'),
   Phrase('Thank you', 'Salamat', 'Greetings'),
   Phrase('You are welcome', 'Walang anuman', 'Greetings'),
