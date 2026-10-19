@@ -44,10 +44,3 @@ flutter_launcher_icons:
   image_path: "assets/icon/app_icon.jpeg"
   min_sdk_android: 21
 
-flutter_native_splash:
-  color: "#0F172A" # Your app's Navy color
-  image: assets/icon/app_icon.jpeg
-  android_12:
-    color: "#0F172A"
-    image: assets/icon/app_icon.jpeg
-    icon_background_color: "#0F172A"
