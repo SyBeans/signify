@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:intl/intl.dart';
 import '../providers/app_state.dart';
 import '../services/tts_service.dart';
 import '../theme.dart';
@@ -44,14 +43,21 @@ class _HistoryScreenState extends State<HistoryScreen> {
     }
   }
 
+  // Bulletproof time formatter to replace intl
+  String _formatTime(DateTime time) {
+    final hour = time.hour > 12
+        ? time.hour - 12
+        : (time.hour == 0 ? 12 : time.hour);
+    final minute = time.minute.toString().padLeft(2, '0');
+    final period = time.hour >= 12 ? 'PM' : 'AM';
+    return '$hour:$minute $period';
+  }
+
   Future<void> _speakEntry(AppState state, TranslationEntry entry) async {
     final text = state.speechLanguage == 'fil' ? entry.filipino : entry.english;
-
-    // Use ID, or timestamp if ID is null
     final id = entry.id ?? entry.time.millisecondsSinceEpoch;
     setState(() => _speakingId = id);
 
-    // Estimate duration for the animation (approx 80ms per char)
     final estimated = Duration(
       milliseconds: (text.length * 80).clamp(1500, 8000),
     );
@@ -228,7 +234,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
                                   Row(
                                     children: [
                                       Text(
-                                        DateFormat('h:mm a').format(e.time),
+                                        _formatTime(e.time),
                                         style: const TextStyle(
                                           fontSize: 10,
                                           color: AppColors.textSoft,
@@ -270,7 +276,6 @@ class _HistoryScreenState extends State<HistoryScreen> {
                                   ),
                                 ),
                                 const SizedBox(height: 12),
-                                // NEW: Animated Speak Button
                                 _SpeakButton(
                                   isSpeaking: isSpeaking,
                                   onTap: () => _speakEntry(state, e),
@@ -322,7 +327,6 @@ class _HistoryScreenState extends State<HistoryScreen> {
   }
 }
 
-/// Speak button that pulses and turns blue while active (Copied from Phrasebook)
 class _SpeakButton extends StatefulWidget {
   final bool isSpeaking;
   final VoidCallback onTap;
@@ -379,7 +383,7 @@ class _SpeakButtonState extends State<_SpeakButton>
             child: AnimatedContainer(
               duration: const Duration(milliseconds: 200),
               width: 32,
-              height: 32, // Slightly smaller to fit the list better
+              height: 32,
               decoration: BoxDecoration(
                 color: speaking
                     ? AppColors.blue
@@ -402,7 +406,10 @@ class _SpeakButtonState extends State<_SpeakButton>
               child: Icon(
                 speaking ? Icons.volume_up_rounded : Icons.play_arrow_rounded,
                 size: 18,
-                color: speaking ? Colors.white : AppColors.textDark,
+                color: speaking
+                    ? Colors.white
+                    : (Theme.of(context).textTheme.bodyLarge?.color ??
+                          AppColors.textDark),
               ),
             ),
           );

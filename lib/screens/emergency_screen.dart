@@ -7,7 +7,6 @@ import '../theme.dart';
 
 class EmergencyScreen extends StatefulWidget {
   const EmergencyScreen({super.key});
-
   @override
   State<EmergencyScreen> createState() => _EmergencyScreenState();
 }
@@ -21,7 +20,6 @@ class _EmergencyScreenState extends State<EmergencyScreen> {
   ];
 
   final TextEditingController _noteController = TextEditingController();
-
   String? _lastTapped;
   Timer? _tapClearTimer;
   String? _speakingPhrase;
@@ -49,13 +47,11 @@ class _EmergencyScreenState extends State<EmergencyScreen> {
     final estimated = Duration(
       milliseconds: (text.length * 80).clamp(1500, 8000),
     );
-
     await TtsService.speak(
       text,
       lang: state.speechLanguage,
       speed: state.speechSpeed,
     );
-
     _speakClearTimer?.cancel();
     _speakClearTimer = Timer(estimated, () {
       if (mounted && _speakingPhrase == en)
@@ -63,21 +59,14 @@ class _EmergencyScreenState extends State<EmergencyScreen> {
     });
   }
 
-  String _buildSmsBody(AppState state, String note) {
-    final base = '🚨 EMERGENCY!\n${state.userName} needs help!';
-    if (note.isEmpty) return base;
-    return '$base\nNote: $note';
-  }
-
   void _showSendDialog(AppState state) {
     final note = _noteController.text.trim();
-    final smsBody = _buildSmsBody(state, note);
+    final smsBody =
+        '🚨 EMERGENCY!\n${state.userName} needs help!${note.isEmpty ? '' : '\nNote: $note'}';
 
     showDialog<void>(
       context: context,
       builder: (ctx) => AlertDialog(
-        titlePadding: const EdgeInsets.fromLTRB(20, 20, 20, 8),
-        contentPadding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
         title: Row(
           children: [
             const Icon(
@@ -130,7 +119,7 @@ class _EmergencyScreenState extends State<EmergencyScreen> {
               Container(
                 padding: const EdgeInsets.all(10),
                 decoration: BoxDecoration(
-                  color: AppColors.bg,
+                  color: Theme.of(context).scaffoldBackgroundColor,
                   borderRadius: BorderRadius.circular(8),
                   border: Border.all(color: AppColors.border),
                 ),
@@ -154,7 +143,16 @@ class _EmergencyScreenState extends State<EmergencyScreen> {
             ),
             onPressed: () {
               Navigator.pop(ctx);
-              _onMockSend(state, note.isNotEmpty);
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  backgroundColor: AppColors.red,
+                  duration: const Duration(seconds: 3),
+                  content: Text(
+                    '🚨 Demo: SMS queued to ${state.contacts.length} contacts${note.isNotEmpty ? ' (with note)' : ''}',
+                    style: const TextStyle(color: Colors.white),
+                  ),
+                ),
+              );
             },
             child: const Text('SEND NOW'),
           ),
@@ -163,22 +161,10 @@ class _EmergencyScreenState extends State<EmergencyScreen> {
     );
   }
 
-  void _onMockSend(AppState state, bool hadNote) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        backgroundColor: AppColors.red,
-        duration: const Duration(seconds: 3),
-        content: Text(
-          '🚨 Demo: SMS queued to ${state.contacts.length} contacts${hadNote ? ' (with note)' : ''}',
-          style: const TextStyle(color: Colors.white),
-        ),
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     final state = context.watch<AppState>();
+    final isDark = Theme.of(context).brightness == Brightness.dark;
 
     return Scaffold(
       backgroundColor: AppColors.red,
@@ -186,7 +172,6 @@ class _EmergencyScreenState extends State<EmergencyScreen> {
         bottom: false,
         child: Column(
           children: [
-            // ── Red top banner ──
             Container(
               width: double.infinity,
               padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
@@ -265,20 +250,19 @@ class _EmergencyScreenState extends State<EmergencyScreen> {
                 ],
               ),
             ),
-
-            // ── White content ──
             Expanded(
               child: Container(
-                decoration: const BoxDecoration(
-                  color: AppColors.bg,
-                  borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+                decoration: BoxDecoration(
+                  color: Theme.of(context).scaffoldBackgroundColor,
+                  borderRadius: const BorderRadius.vertical(
+                    top: Radius.circular(24),
+                  ),
                 ),
                 child: ListView(
                   padding: const EdgeInsets.all(20),
                   children: [
-                    // ── Big alert card ──
                     Material(
-                      color: AppColors.navy,
+                      color: isDark ? AppColors.navyLight : AppColors.navy,
                       borderRadius: BorderRadius.circular(16),
                       child: InkWell(
                         borderRadius: BorderRadius.circular(16),
@@ -333,8 +317,6 @@ class _EmergencyScreenState extends State<EmergencyScreen> {
                       ),
                     ),
                     const SizedBox(height: 12),
-
-                    // ── Optional note ──
                     const Text(
                       'NOTE (OPTIONAL)',
                       style: TextStyle(
@@ -347,9 +329,9 @@ class _EmergencyScreenState extends State<EmergencyScreen> {
                     const SizedBox(height: 6),
                     TextField(
                       controller: _noteController,
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontSize: 14,
-                        color: AppColors.textDark,
+                        color: Theme.of(context).textTheme.bodyLarge?.color,
                       ),
                       maxLines: 2,
                       maxLength: 100,
@@ -360,7 +342,7 @@ class _EmergencyScreenState extends State<EmergencyScreen> {
                           fontSize: 13,
                         ),
                         filled: true,
-                        fillColor: Colors.white,
+                        fillColor: Theme.of(context).cardColor,
                         counterStyle: const TextStyle(
                           color: AppColors.textSoft,
                           fontSize: 10,
@@ -371,11 +353,15 @@ class _EmergencyScreenState extends State<EmergencyScreen> {
                         ),
                         border: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(12),
-                          borderSide: const BorderSide(color: AppColors.border),
+                          borderSide: BorderSide(
+                            color: isDark ? Colors.white12 : AppColors.border,
+                          ),
                         ),
                         enabledBorder: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(12),
-                          borderSide: const BorderSide(color: AppColors.border),
+                          borderSide: BorderSide(
+                            color: isDark ? Colors.white12 : AppColors.border,
+                          ),
                         ),
                         focusedBorder: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(12),
@@ -387,14 +373,14 @@ class _EmergencyScreenState extends State<EmergencyScreen> {
                       ),
                     ),
                     const SizedBox(height: 12),
-
-                    // ── GPS progress ──
                     Container(
                       padding: const EdgeInsets.all(14),
                       decoration: BoxDecoration(
-                        color: Colors.white,
+                        color: Theme.of(context).cardColor,
                         borderRadius: BorderRadius.circular(14),
-                        border: Border.all(color: AppColors.border),
+                        border: Border.all(
+                          color: isDark ? Colors.white12 : AppColors.border,
+                        ),
                       ),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
@@ -407,12 +393,15 @@ class _EmergencyScreenState extends State<EmergencyScreen> {
                                 color: AppColors.textSoft,
                               ),
                               const SizedBox(width: 6),
-                              const Text(
+                              Text(
                                 'ACQUIRING GPS LOCATION',
                                 style: TextStyle(
                                   fontSize: 11,
                                   fontWeight: FontWeight.w700,
                                   letterSpacing: 0.6,
+                                  color: Theme.of(
+                                    context,
+                                  ).textTheme.bodyLarge?.color,
                                 ),
                               ),
                               const Spacer(),
@@ -429,11 +418,13 @@ class _EmergencyScreenState extends State<EmergencyScreen> {
                           const SizedBox(height: 10),
                           ClipRRect(
                             borderRadius: BorderRadius.circular(4),
-                            child: const LinearProgressIndicator(
+                            child: LinearProgressIndicator(
                               value: 0.8,
                               minHeight: 5,
-                              backgroundColor: AppColors.border,
-                              valueColor: AlwaysStoppedAnimation(
+                              backgroundColor: isDark
+                                  ? Colors.white12
+                                  : AppColors.border,
+                              valueColor: const AlwaysStoppedAnimation(
                                 AppColors.green,
                               ),
                             ),
@@ -442,8 +433,6 @@ class _EmergencyScreenState extends State<EmergencyScreen> {
                       ),
                     ),
                     const SizedBox(height: 16),
-
-                    // ── Contacts ──
                     Row(
                       children: state.contacts.map((c) {
                         final initial = c.name.isNotEmpty
@@ -460,17 +449,23 @@ class _EmergencyScreenState extends State<EmergencyScreen> {
                                 horizontal: 6,
                               ),
                               decoration: BoxDecoration(
-                                color: Colors.white,
+                                color: Theme.of(context).cardColor,
                                 borderRadius: BorderRadius.circular(14),
-                                border: Border.all(color: AppColors.border),
+                                border: Border.all(
+                                  color: isDark
+                                      ? Colors.white12
+                                      : AppColors.border,
+                                ),
                               ),
                               child: Column(
                                 children: [
                                   Container(
                                     width: 36,
                                     height: 36,
-                                    decoration: const BoxDecoration(
-                                      color: AppColors.pinkSoft,
+                                    decoration: BoxDecoration(
+                                      color: isDark
+                                          ? AppColors.pink.withOpacity(0.2)
+                                          : AppColors.pinkSoft,
                                       shape: BoxShape.circle,
                                     ),
                                     alignment: Alignment.center,
@@ -485,9 +480,12 @@ class _EmergencyScreenState extends State<EmergencyScreen> {
                                   const SizedBox(height: 6),
                                   Text(
                                     c.name,
-                                    style: const TextStyle(
+                                    style: TextStyle(
                                       fontWeight: FontWeight.w700,
                                       fontSize: 13,
+                                      color: Theme.of(
+                                        context,
+                                      ).textTheme.bodyLarge?.color,
                                     ),
                                   ),
                                   const SizedBox(height: 2),
@@ -507,7 +505,6 @@ class _EmergencyScreenState extends State<EmergencyScreen> {
                       }).toList(),
                     ),
                     const SizedBox(height: 24),
-
                     const Text(
                       'OR SPEAK A PHRASE',
                       style: TextStyle(
@@ -518,7 +515,6 @@ class _EmergencyScreenState extends State<EmergencyScreen> {
                       ),
                     ),
                     const SizedBox(height: 12),
-
                     ..._phrases.map(
                       (p) => Padding(
                         padding: const EdgeInsets.only(bottom: 10),
@@ -550,7 +546,6 @@ class _EmergencyPhrase extends StatelessWidget {
   final bool isSpeaking;
   final VoidCallback onTap;
   final VoidCallback onSpeak;
-
   const _EmergencyPhrase({
     required this.en,
     required this.fil,
@@ -559,9 +554,9 @@ class _EmergencyPhrase extends StatelessWidget {
     required this.onTap,
     required this.onSpeak,
   });
-
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     return Material(
       color: Colors.transparent,
       borderRadius: BorderRadius.circular(14),
@@ -574,10 +569,14 @@ class _EmergencyPhrase extends StatelessWidget {
           duration: const Duration(milliseconds: 180),
           padding: const EdgeInsets.all(14),
           decoration: BoxDecoration(
-            color: isFlashing ? AppColors.red.withOpacity(0.08) : Colors.white,
+            color: isFlashing
+                ? AppColors.red.withOpacity(0.08)
+                : Theme.of(context).cardColor,
             borderRadius: BorderRadius.circular(14),
             border: Border.all(
-              color: isFlashing ? AppColors.red : AppColors.border,
+              color: isFlashing
+                  ? AppColors.red
+                  : (isDark ? Colors.white12 : AppColors.border),
               width: isFlashing ? 2 : 1,
             ),
           ),
@@ -589,9 +588,10 @@ class _EmergencyPhrase extends StatelessWidget {
                   children: [
                     Text(
                       en,
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontSize: 15,
                         fontWeight: FontWeight.w700,
+                        color: Theme.of(context).textTheme.bodyLarge?.color,
                       ),
                     ),
                     const SizedBox(height: 3),
@@ -619,7 +619,6 @@ class _SpeakButton extends StatefulWidget {
 class _SpeakButtonState extends State<_SpeakButton>
     with SingleTickerProviderStateMixin {
   late AnimationController _pulseController;
-
   @override
   void initState() {
     super.initState();

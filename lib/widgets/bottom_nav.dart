@@ -25,12 +25,15 @@ class SignifyBottomNav extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Wrap the entire bottom nav in withNoTextScaling so it doesn't break
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
     return MediaQuery.withNoTextScaling(
       child: Container(
-        decoration: const BoxDecoration(
-          color: Colors.white,
-          border: Border(top: BorderSide(color: AppColors.border)),
+        decoration: BoxDecoration(
+          color: Theme.of(context).cardColor, // Adapts to dark mode
+          border: Border(
+            top: BorderSide(color: isDark ? Colors.white12 : AppColors.border),
+          ),
         ),
         padding: const EdgeInsets.symmetric(vertical: 8),
         child: SafeArea(
@@ -41,7 +44,9 @@ class SignifyBottomNav extends StatelessWidget {
               final item = _items[i];
               final active = i == current;
               final color = active
-                  ? (item.isEmergency ? AppColors.red : AppColors.navy)
+                  ? (item.isEmergency
+                        ? AppColors.red
+                        : (isDark ? Colors.white : AppColors.navy))
                   : AppColors.grey;
               return InkWell(
                 onTap: () => onTap(i),
@@ -60,7 +65,6 @@ class SignifyBottomNav extends StatelessWidget {
                         color: color,
                       ),
                       const SizedBox(height: 2),
-                      // Added FittedBox just in case the phone is very narrow
                       FittedBox(
                         fit: BoxFit.scaleDown,
                         child: Text(

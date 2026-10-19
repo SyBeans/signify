@@ -27,6 +27,8 @@ class _EmergencySetupScreenState extends State<EmergencySetupScreen> {
   @override
   Widget build(BuildContext context) {
     final s = context.watch<AppState>();
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
     return Scaffold(
       appBar: AppBar(
         leading: IconButton(
@@ -45,12 +47,17 @@ class _EmergencySetupScreenState extends State<EmergencySetupScreen> {
           const SizedBox(height: 8),
           Container(
             decoration: BoxDecoration(
-              color: Colors.white,
+              color: Theme.of(context).cardColor,
               borderRadius: BorderRadius.circular(14),
-              border: Border.all(color: AppColors.border),
+              border: Border.all(
+                color: isDark ? Colors.white12 : AppColors.border,
+              ),
             ),
             child: TextField(
               controller: _name,
+              style: TextStyle(
+                color: Theme.of(context).textTheme.bodyLarge?.color,
+              ),
               decoration: const InputDecoration(
                 border: InputBorder.none,
                 contentPadding: EdgeInsets.symmetric(
@@ -104,9 +111,11 @@ class _EmergencySetupScreenState extends State<EmergencySetupScreen> {
                 child: Container(
                   padding: const EdgeInsets.all(14),
                   decoration: BoxDecoration(
-                    color: Colors.white,
+                    color: Theme.of(context).cardColor,
                     borderRadius: BorderRadius.circular(14),
-                    border: Border.all(color: AppColors.border),
+                    border: Border.all(
+                      color: isDark ? Colors.white12 : AppColors.border,
+                    ),
                   ),
                   child: Row(
                     children: [
@@ -116,9 +125,12 @@ class _EmergencySetupScreenState extends State<EmergencySetupScreen> {
                           children: [
                             Text(
                               c.name,
-                              style: const TextStyle(
+                              style: TextStyle(
                                 fontWeight: FontWeight.w700,
                                 fontSize: 14,
+                                color: Theme.of(
+                                  context,
+                                ).textTheme.bodyLarge?.color,
                               ),
                             ),
                             const SizedBox(height: 3),
@@ -143,14 +155,19 @@ class _EmergencySetupScreenState extends State<EmergencySetupScreen> {
           const SizedBox(height: 10),
           Container(
             decoration: BoxDecoration(
-              color: Colors.white,
+              color: Theme.of(context).cardColor,
               borderRadius: BorderRadius.circular(14),
-              border: Border.all(color: AppColors.border),
+              border: Border.all(
+                color: isDark ? Colors.white12 : AppColors.border,
+              ),
             ),
             child: Column(
               children: [
                 _locRow('Include GPS location', s.includeGps, s.setIncludeGps),
-                const Divider(height: 0),
+                Divider(
+                  height: 0,
+                  color: isDark ? Colors.white12 : AppColors.border,
+                ),
                 _locRow(
                   'Wait for accurate GPS',
                   s.waitAccurateGps,
@@ -164,7 +181,7 @@ class _EmergencySetupScreenState extends State<EmergencySetupScreen> {
 
           FilledButton.icon(
             style: FilledButton.styleFrom(
-              backgroundColor: AppColors.navy,
+              backgroundColor: isDark ? AppColors.blue : AppColors.navy,
               foregroundColor: Colors.white,
               padding: const EdgeInsets.symmetric(vertical: 16),
               shape: RoundedRectangleBorder(
@@ -172,13 +189,8 @@ class _EmergencySetupScreenState extends State<EmergencySetupScreen> {
               ),
             ),
             onPressed: () async {
-              // Save user name
               s.setUserName(_name.text);
-
-              // Contacts are saved immediately when edited,
-              // but we ensure everything is synced before popping.
               await s.saveContacts(s.contacts);
-
               if (context.mounted) Navigator.pop(context);
             },
             icon: const Icon(Icons.save_outlined, size: 18),
@@ -192,7 +204,6 @@ class _EmergencySetupScreenState extends State<EmergencySetupScreen> {
     );
   }
 
-  // Dialog for Adding/Editing/Deleting a contact
   void _showContactDialog(BuildContext context, AppState s, Contact? contact) {
     final isEditing = contact != null;
     final nameCtrl = TextEditingController(text: contact?.name ?? '');
@@ -229,7 +240,6 @@ class _EmergencySetupScreenState extends State<EmergencySetupScreen> {
             if (isEditing)
               TextButton(
                 onPressed: () async {
-                  // Delete logic
                   final newList = List<Contact>.from(s.contacts)
                     ..remove(contact);
                   await s.saveContacts(newList);
@@ -248,15 +258,14 @@ class _EmergencySetupScreenState extends State<EmergencySetupScreen> {
               onPressed: () async {
                 final name = nameCtrl.text.trim();
                 final phone = phoneCtrl.text.trim();
-                if (name.isEmpty || phone.isEmpty) return; // Basic validation
-
+                if (name.isEmpty || phone.isEmpty) return;
                 final newList = List<Contact>.from(s.contacts);
                 if (isEditing) {
-                  // Edit logic
-                  final idx = newList.indexOf(contact);
-                  newList[idx] = Contact(name: name, phone: phone);
+                  newList[newList.indexOf(contact)] = Contact(
+                    name: name,
+                    phone: phone,
+                  );
                 } else {
-                  // Add logic
                   newList.add(Contact(name: name, phone: phone));
                 }
                 await s.saveContacts(newList);
@@ -286,9 +295,10 @@ class _EmergencySetupScreenState extends State<EmergencySetupScreen> {
               children: [
                 Text(
                   title,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontWeight: FontWeight.w700,
                     fontSize: 14,
+                    color: Theme.of(context).textTheme.bodyLarge?.color,
                   ),
                 ),
                 if (subtitle != null) ...[

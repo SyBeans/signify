@@ -14,9 +14,13 @@ class SettingsScreen extends StatelessWidget {
       child: ListView(
         padding: const EdgeInsets.fromLTRB(20, 16, 20, 20),
         children: [
-          Text('Settings', style: AppText.header),
+          Text(
+            'Settings',
+            style: AppText.header.copyWith(
+              color: Theme.of(context).textTheme.bodyLarge?.color,
+            ),
+          ),
           const SizedBox(height: 24),
-
           _section('LANGUAGE'),
           _Segmented(
             options: const ['ENG', 'BOTH', 'FIL'],
@@ -46,7 +50,6 @@ class SettingsScreen extends StatelessWidget {
             subtitle: 'Voice used for output',
           ),
           const SizedBox(height: 24),
-
           _section('EMERGENCY'),
           _NavTile(
             title: 'Emergency Setup',
@@ -57,7 +60,6 @@ class SettingsScreen extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 24),
-
           _section('TRANSLATION'),
           _SwitchTile(
             title: 'Show emotion',
@@ -80,7 +82,6 @@ class SettingsScreen extends StatelessWidget {
             title: 'Speech speed',
           ),
           const SizedBox(height: 24),
-
           _section('APPEARANCE'),
           _SwitchTile(
             title: 'Dark mode',
@@ -95,19 +96,13 @@ class SettingsScreen extends StatelessWidget {
             title: 'Text size',
           ),
           const SizedBox(height: 24),
-
           _section('DATA'),
           _NavTile(
             title: 'Clear history',
             onTap: () => _showClearHistoryDialog(context, s),
           ),
           const SizedBox(height: 10),
-          _NavTile(
-            title: 'About Signify',
-            onTap: () {
-              // Blank for now
-            },
-          ),
+          _NavTile(title: 'About Signify', onTap: () {}),
         ],
       ),
     );
@@ -127,7 +122,10 @@ class SettingsScreen extends StatelessWidget {
             child: const Text('Cancel'),
           ),
           FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: AppColors.red),
+            style: FilledButton.styleFrom(
+              backgroundColor: AppColors.red,
+              foregroundColor: Colors.white, // <--- ADD THIS LINE
+            ),
             onPressed: () {
               s.clearHistory();
               Navigator.pop(ctx);
@@ -159,15 +157,15 @@ class _SwitchTile extends StatelessWidget {
     required this.value,
     required this.onChanged,
   });
-
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       decoration: BoxDecoration(
         color: Theme.of(context).cardColor,
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: AppColors.border),
+        border: Border.all(color: isDark ? Colors.white12 : AppColors.border),
       ),
       child: Row(
         children: [
@@ -214,17 +212,15 @@ class _Segmented extends StatelessWidget {
     required this.title,
     this.subtitle,
   });
-
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
         color: Theme.of(context).cardColor,
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: AppColors.border),
+        border: Border.all(color: isDark ? Colors.white12 : AppColors.border),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -257,9 +253,8 @@ class _Segmented extends StatelessWidget {
                     child: Container(
                       padding: const EdgeInsets.symmetric(vertical: 8),
                       decoration: BoxDecoration(
-                        // If active, it's always White or a bright highlight
                         color: active
-                            ? (isDark ? AppColors.blue : Colors.white)
+                            ? (isDark ? AppColors.navyLight : Colors.white)
                             : Colors.transparent,
                         borderRadius: BorderRadius.circular(8),
                         boxShadow: active
@@ -278,7 +273,6 @@ class _Segmented extends StatelessWidget {
                         style: TextStyle(
                           fontSize: 12,
                           fontWeight: FontWeight.w700,
-                          // Text color flips to white if active in dark mode
                           color: active
                               ? (isDark ? Colors.white : AppColors.textDark)
                               : AppColors.textSoft,
@@ -301,9 +295,9 @@ class _NavTile extends StatelessWidget {
   final String? subtitle;
   final VoidCallback onTap;
   const _NavTile({required this.title, this.subtitle, required this.onTap});
-
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     return InkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(14),
@@ -312,7 +306,7 @@ class _NavTile extends StatelessWidget {
         decoration: BoxDecoration(
           color: Theme.of(context).cardColor,
           borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: AppColors.border),
+          border: Border.all(color: isDark ? Colors.white12 : AppColors.border),
         ),
         child: Row(
           children: [

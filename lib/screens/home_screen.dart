@@ -16,7 +16,6 @@ class HomeScreen extends StatelessWidget {
     this.onOpenPhrasebook,
   });
 
-  // Bulletproof time formatter (No external packages needed)
   String _formatTime(DateTime time) {
     final hour = time.hour > 12
         ? time.hour - 12
@@ -29,12 +28,12 @@ class HomeScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final state = context.watch<AppState>();
+    final isDark = Theme.of(context).brightness == Brightness.dark;
 
     return SafeArea(
       child: ListView(
         padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
         children: [
-          // Header
           Row(
             children: [
               Text(
@@ -43,9 +42,7 @@ class HomeScreen extends StatelessWidget {
                   fontSize: 13,
                   fontWeight: FontWeight.w800,
                   letterSpacing: 2.4,
-                  color:
-                      Theme.of(context).textTheme.bodyLarge?.color ??
-                      AppColors.textDark,
+                  color: Theme.of(context).textTheme.bodyLarge?.color,
                 ),
               ),
               const Spacer(),
@@ -55,7 +52,9 @@ class HomeScreen extends StatelessWidget {
                   vertical: 5,
                 ),
                 decoration: BoxDecoration(
-                  color: AppColors.greenSoft,
+                  color: isDark
+                      ? AppColors.green.withOpacity(0.2)
+                      : AppColors.greenSoft,
                   borderRadius: BorderRadius.circular(20),
                 ),
                 child: Row(
@@ -69,13 +68,15 @@ class HomeScreen extends StatelessWidget {
                       ),
                     ),
                     const SizedBox(width: 6),
-                    const Text(
+                    Text(
                       'MODEL READY',
                       style: TextStyle(
                         fontSize: 10,
                         fontWeight: FontWeight.w800,
                         letterSpacing: 0.8,
-                        color: Color(0xFF065F46),
+                        color: isDark
+                            ? AppColors.green
+                            : const Color(0xFF065F46),
                       ),
                     ),
                   ],
@@ -85,11 +86,9 @@ class HomeScreen extends StatelessWidget {
           ),
           const SizedBox(height: 20),
 
-          // Hero card (tappable)
           _HeroCard(onTap: onStartTranslation ?? () {}),
           const SizedBox(height: 16),
 
-          // Quick tiles
           Row(
             children: [
               Expanded(
@@ -97,8 +96,9 @@ class HomeScreen extends StatelessWidget {
                   icon: Icons.warning_amber_rounded,
                   label: 'Emergency',
                   color: AppColors.red,
-                  bg: AppColors.redSoft,
-                  // Uses bottom nav instead of push
+                  bg: isDark
+                      ? AppColors.red.withOpacity(0.15)
+                      : AppColors.redSoft,
                   onTap: onOpenEmergency ?? () {},
                 ),
               ),
@@ -111,7 +111,6 @@ class HomeScreen extends StatelessWidget {
                       Theme.of(context).textTheme.bodyLarge?.color ??
                       AppColors.textDark,
                   bg: Theme.of(context).cardColor,
-                  // Uses bottom nav instead of push
                   onTap: onOpenPhrasebook ?? () {},
                 ),
               ),
@@ -124,7 +123,6 @@ class HomeScreen extends StatelessWidget {
                       Theme.of(context).textTheme.bodyLarge?.color ??
                       AppColors.textDark,
                   bg: Theme.of(context).cardColor,
-                  // History is NOT a bottom nav tab, so it still uses push
                   onTap: () => Navigator.push(
                     context,
                     MaterialPageRoute(builder: (_) => const HistoryScreen()),
@@ -146,7 +144,6 @@ class HomeScreen extends StatelessWidget {
           ),
           const SizedBox(height: 12),
 
-          // Dynamic Recent List
           if (state.history.isEmpty)
             Padding(
               padding: const EdgeInsets.symmetric(vertical: 20),
@@ -191,6 +188,7 @@ class _HeroCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     return Material(
       color: Colors.transparent,
       borderRadius: BorderRadius.circular(20),
@@ -200,7 +198,9 @@ class _HeroCard extends StatelessWidget {
         child: Container(
           padding: const EdgeInsets.all(20),
           decoration: BoxDecoration(
-            color: AppColors.navy,
+            color: isDark
+                ? AppColors.navyLight
+                : AppColors.navy, // Lighter navy for dark mode
             borderRadius: BorderRadius.circular(20),
           ),
           child: Row(
@@ -251,15 +251,12 @@ class _HeroCard extends StatelessWidget {
 
 class _HandLandmarkIllustration extends StatelessWidget {
   const _HandLandmarkIllustration();
-
   @override
-  Widget build(BuildContext context) {
-    return SizedBox(
-      width: 80,
-      height: 100,
-      child: CustomPaint(painter: _HandLandmarkPainter()),
-    );
-  }
+  Widget build(BuildContext context) => SizedBox(
+    width: 80,
+    height: 100,
+    child: CustomPaint(painter: _HandLandmarkPainter()),
+  );
 }
 
 class _HandLandmarkPainter extends CustomPainter {
@@ -286,7 +283,6 @@ class _HandLandmarkPainter extends CustomPainter {
     [0.90, 0.44],
     [0.94, 0.34],
   ];
-
   static const List<List<int>> _connections = [
     [0, 1],
     [0, 5],
@@ -318,25 +314,19 @@ class _HandLandmarkPainter extends CustomPainter {
     final offsets = _points
         .map((p) => Offset(p[0] * w, p[1] * h))
         .toList(growable: false);
-
     final bonePaint = Paint()
       ..color = const Color(0xFF8B5CF6).withOpacity(0.55)
       ..strokeWidth = 1.5
       ..strokeCap = StrokeCap.round
       ..style = PaintingStyle.stroke;
-
-    for (final c in _connections) {
+    for (final c in _connections)
       canvas.drawLine(offsets[c[0]], offsets[c[1]], bonePaint);
-    }
-
     final glow = Paint()
       ..color = const Color(0xFF8B5CF6).withOpacity(0.35)
       ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 6);
-
     final jointPaint = Paint()..color = const Color(0xFFA78BFA);
     final tipPaint = Paint()..color = const Color(0xFFC4B5FD);
     const tips = {4, 8, 12, 16, 20};
-
     for (int i = 0; i < offsets.length; i++) {
       final isTip = tips.contains(i);
       final r = isTip ? 3.5 : 2.2;
@@ -362,9 +352,9 @@ class _QuickTile extends StatelessWidget {
     required this.bg,
     required this.onTap,
   });
-
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     return Material(
       color: bg,
       borderRadius: BorderRadius.circular(16),
@@ -376,11 +366,7 @@ class _QuickTile extends StatelessWidget {
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(16),
             border: bg == Theme.of(context).cardColor
-                ? Border.all(
-                    color: Theme.of(context).brightness == Brightness.dark
-                        ? Colors.white12
-                        : AppColors.border,
-                  )
+                ? Border.all(color: isDark ? Colors.white12 : AppColors.border)
                 : null,
           ),
           child: Column(
@@ -407,7 +393,6 @@ class _RecentItem extends StatelessWidget {
   final TranslationEntry entry;
   final String formattedTime;
   const _RecentItem({required this.entry, required this.formattedTime});
-
   String _emoji(String emo) {
     switch (emo.toLowerCase()) {
       case 'positive':
@@ -426,7 +411,6 @@ class _RecentItem extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
@@ -439,8 +423,10 @@ class _RecentItem extends StatelessWidget {
           Container(
             width: 38,
             height: 38,
-            decoration: const BoxDecoration(
-              color: AppColors.pinkSoft,
+            decoration: BoxDecoration(
+              color: isDark
+                  ? AppColors.pink.withOpacity(0.2)
+                  : AppColors.pinkSoft,
               shape: BoxShape.circle,
             ),
             alignment: Alignment.center,
@@ -459,9 +445,7 @@ class _RecentItem extends StatelessWidget {
                   style: TextStyle(
                     fontSize: 14,
                     fontWeight: FontWeight.w700,
-                    color:
-                        Theme.of(context).textTheme.bodyLarge?.color ??
-                        AppColors.textDark,
+                    color: Theme.of(context).textTheme.bodyLarge?.color,
                   ),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,

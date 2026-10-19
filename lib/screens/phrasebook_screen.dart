@@ -40,13 +40,11 @@ class _PhrasebookScreenState extends State<PhrasebookScreen> {
     final estimated = Duration(
       milliseconds: (text.length * 80).clamp(1500, 8000),
     );
-
     await TtsService.speak(
       text,
       lang: state.speechLanguage,
       speed: state.speechSpeed,
     );
-
     _speakClearTimer?.cancel();
     _speakClearTimer = Timer(estimated, () {
       if (mounted && _speakingPhrase == p.english)
@@ -57,6 +55,7 @@ class _PhrasebookScreenState extends State<PhrasebookScreen> {
   @override
   Widget build(BuildContext context) {
     final state = context.watch<AppState>();
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     const cats = [
       'All',
       'Emergency',
@@ -67,10 +66,7 @@ class _PhrasebookScreenState extends State<PhrasebookScreen> {
       'School',
     ];
 
-    // 1. Create a dynamic copy of the phrasebook list
     final dynamicPhrases = List<Phrase>.from(phrasebookData);
-
-    // 2. Inject the dynamic user name
     final safeName = state.userName.trim().isEmpty
         ? 'Jonathan'
         : state.userName.trim();
@@ -78,29 +74,30 @@ class _PhrasebookScreenState extends State<PhrasebookScreen> {
       Phrase('I am $safeName', 'Ako si $safeName', 'Greetings'),
     );
 
-    // 3. Filter the dynamic list
     final filtered = _category == 'All'
         ? dynamicPhrases
         : dynamicPhrases.where((p) => p.category == _category).toList();
-
-    // 4. Separate into favorites and rest
     final favorites = filtered
         .where((p) => state.phrasebookFavs.contains(p.english))
         .toList();
     final rest = filtered
         .where((p) => !state.phrasebookFavs.contains(p.english))
         .toList();
-
     final grouped = <String, List<Phrase>>{};
     for (final p in rest) {
       grouped.putIfAbsent(p.category, () => []).add(p);
     }
 
     return Scaffold(
-      backgroundColor: AppColors.bg,
+      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
       appBar: AppBar(
-        title: Text('Phrasebook', style: AppText.header),
-        backgroundColor: AppColors.bg,
+        title: Text(
+          'Phrasebook',
+          style: AppText.header.copyWith(
+            color: Theme.of(context).textTheme.bodyLarge?.color,
+          ),
+        ),
+        backgroundColor: Theme.of(context).scaffoldBackgroundColor,
         elevation: 0,
         scrolledUnderElevation: 0,
         leading: Navigator.of(context).canPop() ? const BackButton() : null,
@@ -129,10 +126,14 @@ class _PhrasebookScreenState extends State<PhrasebookScreen> {
                         vertical: 8,
                       ),
                       decoration: BoxDecoration(
-                        color: active ? AppColors.blue : Colors.white,
+                        color: active
+                            ? AppColors.blue
+                            : Theme.of(context).cardColor,
                         borderRadius: BorderRadius.circular(20),
                         border: Border.all(
-                          color: active ? AppColors.blue : AppColors.border,
+                          color: active
+                              ? AppColors.blue
+                              : (isDark ? Colors.white12 : AppColors.border),
                         ),
                       ),
                       child: Text(
@@ -140,7 +141,9 @@ class _PhrasebookScreenState extends State<PhrasebookScreen> {
                         style: TextStyle(
                           fontWeight: FontWeight.w700,
                           fontSize: 13,
-                          color: active ? Colors.white : AppColors.textDark,
+                          color: active
+                              ? Colors.white
+                              : Theme.of(context).textTheme.bodyLarge?.color,
                         ),
                       ),
                     ),
@@ -235,7 +238,6 @@ class _PhraseItem extends StatelessWidget {
   final VoidCallback onTap;
   final VoidCallback onFav;
   final VoidCallback onSpeak;
-
   const _PhraseItem({
     required this.phrase,
     required this.fav,
@@ -245,9 +247,9 @@ class _PhraseItem extends StatelessWidget {
     required this.onFav,
     required this.onSpeak,
   });
-
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     return Material(
       color: Colors.transparent,
       borderRadius: BorderRadius.circular(14),
@@ -260,10 +262,14 @@ class _PhraseItem extends StatelessWidget {
           duration: const Duration(milliseconds: 180),
           padding: const EdgeInsets.all(14),
           decoration: BoxDecoration(
-            color: isFlashing ? AppColors.blue.withOpacity(0.10) : Colors.white,
+            color: isFlashing
+                ? AppColors.blue.withOpacity(0.10)
+                : Theme.of(context).cardColor,
             borderRadius: BorderRadius.circular(14),
             border: Border.all(
-              color: isFlashing ? AppColors.blue : AppColors.border,
+              color: isFlashing
+                  ? AppColors.blue
+                  : (isDark ? Colors.white12 : AppColors.border),
               width: isFlashing ? 2 : 1,
             ),
           ),
@@ -275,9 +281,10 @@ class _PhraseItem extends StatelessWidget {
                   children: [
                     Text(
                       phrase.english,
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontSize: 15,
                         fontWeight: FontWeight.w700,
+                        color: Theme.of(context).textTheme.bodyLarge?.color,
                       ),
                     ),
                     const SizedBox(height: 3),
@@ -318,7 +325,6 @@ class _SpeakButton extends StatefulWidget {
 class _SpeakButtonState extends State<_SpeakButton>
     with SingleTickerProviderStateMixin {
   late AnimationController _pulseController;
-
   @override
   void initState() {
     super.initState();
@@ -363,7 +369,9 @@ class _SpeakButtonState extends State<_SpeakButton>
               width: 40,
               height: 40,
               decoration: BoxDecoration(
-                color: speaking ? AppColors.blue : AppColors.bg,
+                color: speaking
+                    ? AppColors.blue
+                    : Theme.of(context).scaffoldBackgroundColor,
                 shape: BoxShape.circle,
                 border: Border.all(
                   color: speaking ? AppColors.blue : AppColors.border,
@@ -382,7 +390,9 @@ class _SpeakButtonState extends State<_SpeakButton>
               child: Icon(
                 speaking ? Icons.volume_up_rounded : Icons.play_arrow_rounded,
                 size: 20,
-                color: speaking ? Colors.white : AppColors.textDark,
+                color: speaking
+                    ? Colors.white
+                    : Theme.of(context).textTheme.bodyLarge?.color,
               ),
             ),
           );

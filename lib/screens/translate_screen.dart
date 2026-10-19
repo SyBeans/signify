@@ -235,7 +235,7 @@ class _TranslateScreenState extends State<TranslateScreen> {
       if (_modelsReady) {
         _updateSignStream(image, faceOut);
         _updateEmotion(image, faceOut);
-        _checkHandDropForAutoSave(); // <-- ADDED THIS
+        _checkHandDropForAutoSave();
       }
     } catch (e) {
       debugPrint('Frame error: $e');
@@ -244,13 +244,9 @@ class _TranslateScreenState extends State<TranslateScreen> {
     }
   }
 
-  // ═══════════════════════════════════════════════════════════
-  // HAND DROP AUTO-SAVE
-  // ═══════════════════════════════════════════════════════════
   void _checkHandDropForAutoSave() {
     final state = context.read<AppState>();
 
-    // If there's no sentence, make sure the timer is canceled and reset
     if (state.sentence.isEmpty) {
       _handDropTimer?.cancel();
       _handDropTimer = null;
@@ -261,9 +257,8 @@ class _TranslateScreenState extends State<TranslateScreen> {
     }
 
     if (_handLandmarks.isEmpty) {
-      // Hand is dropped. Start the timer if it's not already running.
       if (_handDropTimer == null || !_handDropTimer!.isActive) {
-        setState(() => _handDropSecondsLeft = 3); // 3 seconds grace period
+        setState(() => _handDropSecondsLeft = 3);
 
         _handDropTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
           if (!mounted) {
@@ -295,7 +290,6 @@ class _TranslateScreenState extends State<TranslateScreen> {
         });
       }
     } else {
-      // Hand is back in frame. Cancel the countdown so it doesn't save prematurely.
       if (_handDropTimer != null && _handDropTimer!.isActive) {
         _handDropTimer!.cancel();
         _handDropTimer = null;
@@ -304,9 +298,6 @@ class _TranslateScreenState extends State<TranslateScreen> {
     }
   }
 
-  // ═══════════════════════════════════════════════════════════
-  // SIGN — TIME-BASED NATURAL STREAMING
-  // ═══════════════════════════════════════════════════════════
   void _updateSignStream(CameraImage image, List<LandmarkPoint> faceOut) {
     final nowMs = DateTime.now().millisecondsSinceEpoch;
     final bufferLimitMs = (4.0 * 1000).toInt();
@@ -604,6 +595,7 @@ class _TranslateScreenState extends State<TranslateScreen> {
     final emo = state.currentEmotion;
     final emoData = _emotionMap[emo] ?? _emotionMap['Neutral']!;
     final bottomInset = MediaQuery.of(context).viewPadding.bottom;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
 
     String topChipText = '';
     if (state.sentence.isNotEmpty) {
@@ -955,7 +947,6 @@ class _TranslateScreenState extends State<TranslateScreen> {
                           ),
                         ),
                         const Spacer(),
-                        // AUTO-SAVE VISUAL COUNTDOWN (Only shows when hand drops)
                         if (_handDropSecondsLeft > 0)
                           Container(
                             padding: const EdgeInsets.symmetric(
@@ -1027,7 +1018,6 @@ class _TranslateScreenState extends State<TranslateScreen> {
                                     crossAxisAlignment:
                                         CrossAxisAlignment.start,
                                     children: [
-                                      // English display
                                       if (state.displayLanguage == 'eng' ||
                                           state.displayLanguage == 'both')
                                         Text.rich(
@@ -1072,7 +1062,6 @@ class _TranslateScreenState extends State<TranslateScreen> {
                                           ),
                                         ),
 
-                                      // Filipino display
                                       if (state.displayLanguage == 'fil' ||
                                           state.displayLanguage == 'both')
                                         Padding(
@@ -1102,7 +1091,6 @@ class _TranslateScreenState extends State<TranslateScreen> {
                                           ),
                                         ),
 
-                                      // Grammar/Emotion marker
                                       const SizedBox(height: 10),
                                       if (state.sentence.isNotEmpty)
                                         Row(
@@ -1135,7 +1123,6 @@ class _TranslateScreenState extends State<TranslateScreen> {
                       ),
                     ),
 
-                    // Actions
                     Row(
                       children: [
                         _iconBtn(
@@ -1180,15 +1167,12 @@ class _TranslateScreenState extends State<TranslateScreen> {
                         ),
                         const SizedBox(width: 8),
 
-                        // Manual Save Button
                         _iconBtn(
                           Icons.save_outlined,
                           AppColors.blue,
                           bg: AppColors.blueSoft,
                           onTap: () async {
                             if (state.sentence.isEmpty) return;
-
-                            // Cancel the hand-drop timer if it's running
                             _handDropTimer?.cancel();
                             _handDropTimer = null;
                             setState(() => _handDropSecondsLeft = 0);
@@ -1231,7 +1215,6 @@ class _TranslateScreenState extends State<TranslateScreen> {
     );
   }
 
-  // ── Helper UI Methods ──
   Widget _placeholder() {
     return Stack(
       children: [
@@ -1344,20 +1327,29 @@ class _TranslateScreenState extends State<TranslateScreen> {
     Color? bg,
     bool border = false,
     VoidCallback? onTap,
-  }) => InkWell(
-    onTap: onTap,
-    borderRadius: BorderRadius.circular(12),
-    child: Container(
-      width: 44,
-      height: 44,
-      decoration: BoxDecoration(
-        color: bg ?? Theme.of(context).cardColor,
-        borderRadius: BorderRadius.circular(12),
-        border: border ? Border.all(color: AppColors.border) : null,
+  }) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(12),
+      child: Container(
+        width: 44,
+        height: 44,
+        decoration: BoxDecoration(
+          color: bg ?? Theme.of(context).cardColor,
+          borderRadius: BorderRadius.circular(12),
+          border: border
+              ? Border.all(color: isDark ? Colors.white12 : AppColors.border)
+              : null,
+        ),
+        child: Icon(
+          icon,
+          color: isDark && color == AppColors.textDark ? Colors.white : color,
+          size: 20,
+        ),
       ),
-      child: Icon(icon, color: color, size: 20),
-    ),
-  );
+    );
+  }
 
   List<Widget> _corners() {
     final style = Paint()
