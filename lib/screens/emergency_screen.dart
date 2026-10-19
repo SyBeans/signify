@@ -22,11 +22,8 @@ class _EmergencyScreenState extends State<EmergencyScreen> {
 
   final TextEditingController _noteController = TextEditingController();
 
-  // Tap flash (whole card highlights for ~600ms)
   String? _lastTapped;
   Timer? _tapClearTimer;
-
-  // Speaking state (which phrase is currently being spoken)
   String? _speakingPhrase;
   Timer? _speakClearTimer;
 
@@ -48,9 +45,7 @@ class _EmergencyScreenState extends State<EmergencyScreen> {
 
   Future<void> _speakPhrase(AppState state, String en, String fil) async {
     final text = state.speechLanguage == 'fil' ? fil : en;
-
     setState(() => _speakingPhrase = en);
-
     final estimated = Duration(
       milliseconds: (text.length * 80).clamp(1500, 8000),
     );
@@ -63,20 +58,17 @@ class _EmergencyScreenState extends State<EmergencyScreen> {
 
     _speakClearTimer?.cancel();
     _speakClearTimer = Timer(estimated, () {
-      if (mounted && _speakingPhrase == en) {
+      if (mounted && _speakingPhrase == en)
         setState(() => _speakingPhrase = null);
-      }
     });
   }
 
-  /// Build the SMS body (mock — not actually sent)
   String _buildSmsBody(AppState state, String note) {
     final base = '🚨 EMERGENCY!\n${state.userName} needs help!';
     if (note.isEmpty) return base;
     return '$base\nNote: $note';
   }
 
-  /// Show the mock confirmation dialog
   void _showSendDialog(AppState state) {
     final note = _noteController.text.trim();
     final smsBody = _buildSmsBody(state, note);
@@ -171,15 +163,13 @@ class _EmergencyScreenState extends State<EmergencyScreen> {
     );
   }
 
-  /// Mock send — just show a snackbar. No SMS actually sent.
   void _onMockSend(AppState state, bool hadNote) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         backgroundColor: AppColors.red,
         duration: const Duration(seconds: 3),
         content: Text(
-          '🚨 Demo: SMS queued to ${state.contacts.length} contacts'
-          '${hadNote ? ' (with note)' : ''}',
+          '🚨 Demo: SMS queued to ${state.contacts.length} contacts${hadNote ? ' (with note)' : ''}',
           style: const TextStyle(color: Colors.white),
         ),
       ),
@@ -190,9 +180,9 @@ class _EmergencyScreenState extends State<EmergencyScreen> {
   Widget build(BuildContext context) {
     final state = context.watch<AppState>();
 
-    return Container(
-      color: AppColors.red,
-      child: SafeArea(
+    return Scaffold(
+      backgroundColor: AppColors.red,
+      body: SafeArea(
         bottom: false,
         child: Column(
           children: [
@@ -204,14 +194,30 @@ class _EmergencyScreenState extends State<EmergencyScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text(
-                    'WORKS WITHOUT CAMERA',
-                    style: TextStyle(
-                      fontSize: 10,
-                      fontWeight: FontWeight.w800,
-                      letterSpacing: 1.5,
-                      color: Colors.white70,
-                    ),
+                  Row(
+                    children: [
+                      if (Navigator.canPop(context))
+                        GestureDetector(
+                          onTap: () => Navigator.pop(context),
+                          child: const Padding(
+                            padding: EdgeInsets.only(right: 12),
+                            child: Icon(
+                              Icons.arrow_back_ios_new,
+                              color: Colors.white,
+                              size: 20,
+                            ),
+                          ),
+                        ),
+                      const Text(
+                        'WORKS WITHOUT CAMERA',
+                        style: TextStyle(
+                          fontSize: 10,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: 1.5,
+                          color: Colors.white70,
+                        ),
+                      ),
+                    ],
                   ),
                   const SizedBox(height: 6),
                   const Text(
@@ -270,7 +276,7 @@ class _EmergencyScreenState extends State<EmergencyScreen> {
                 child: ListView(
                   padding: const EdgeInsets.all(20),
                   children: [
-                    // ── Big alert card (TAPPABLE) ──
+                    // ── Big alert card ──
                     Material(
                       color: AppColors.navy,
                       borderRadius: BorderRadius.circular(16),
@@ -382,7 +388,7 @@ class _EmergencyScreenState extends State<EmergencyScreen> {
                     ),
                     const SizedBox(height: 12),
 
-                    // ── GPS progress (static mock) ──
+                    // ── GPS progress ──
                     Container(
                       padding: const EdgeInsets.all(14),
                       decoration: BoxDecoration(
@@ -423,11 +429,11 @@ class _EmergencyScreenState extends State<EmergencyScreen> {
                           const SizedBox(height: 10),
                           ClipRRect(
                             borderRadius: BorderRadius.circular(4),
-                            child: LinearProgressIndicator(
+                            child: const LinearProgressIndicator(
                               value: 0.8,
                               minHeight: 5,
                               backgroundColor: AppColors.border,
-                              valueColor: const AlwaysStoppedAnimation(
+                              valueColor: AlwaysStoppedAnimation(
                                 AppColors.green,
                               ),
                             ),
@@ -440,7 +446,9 @@ class _EmergencyScreenState extends State<EmergencyScreen> {
                     // ── Contacts ──
                     Row(
                       children: state.contacts.map((c) {
-                        final initial = c.name[0].toUpperCase();
+                        final initial = c.name.isNotEmpty
+                            ? c.name[0].toUpperCase()
+                            : '?';
                         return Expanded(
                           child: Padding(
                             padding: EdgeInsets.only(
@@ -600,13 +608,10 @@ class _EmergencyPhrase extends StatelessWidget {
   }
 }
 
-/// Speak button that pulses + turns red while speaking.
 class _SpeakButton extends StatefulWidget {
   final bool isSpeaking;
   final VoidCallback onTap;
-
   const _SpeakButton({required this.isSpeaking, required this.onTap});
-
   @override
   State<_SpeakButton> createState() => _SpeakButtonState();
 }
@@ -645,7 +650,6 @@ class _SpeakButtonState extends State<_SpeakButton>
   @override
   Widget build(BuildContext context) {
     final speaking = widget.isSpeaking;
-
     return GestureDetector(
       onTap: widget.onTap,
       behavior: HitTestBehavior.opaque,
@@ -653,7 +657,6 @@ class _SpeakButtonState extends State<_SpeakButton>
         animation: _pulseController,
         builder: (context, child) {
           final scale = speaking ? 1.0 + 0.15 * _pulseController.value : 1.0;
-
           return Transform.scale(
             scale: scale,
             child: AnimatedContainer(
@@ -661,8 +664,6 @@ class _SpeakButtonState extends State<_SpeakButton>
               width: 40,
               height: 40,
               decoration: BoxDecoration(
-                // Red circle while speaking, soft red otherwise (keeps the
-                // emergency theme)
                 color: speaking ? AppColors.red : AppColors.redSoft,
                 shape: BoxShape.circle,
                 border: Border.all(

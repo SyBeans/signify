@@ -2,19 +2,34 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/app_state.dart';
 import '../theme.dart';
-import 'emergency_screen.dart';
-import 'phrasebook_screen.dart';
 import 'history_screen.dart' show HistoryScreen;
 
 class HomeScreen extends StatelessWidget {
-  /// Called when user taps the "Start Translation" hero card.
   final VoidCallback? onStartTranslation;
+  final VoidCallback? onOpenEmergency;
+  final VoidCallback? onOpenPhrasebook;
 
-  const HomeScreen({super.key, this.onStartTranslation});
+  const HomeScreen({
+    super.key,
+    this.onStartTranslation,
+    this.onOpenEmergency,
+    this.onOpenPhrasebook,
+  });
+
+  // Bulletproof time formatter (No external packages needed)
+  String _formatTime(DateTime time) {
+    final hour = time.hour > 12
+        ? time.hour - 12
+        : (time.hour == 0 ? 12 : time.hour);
+    final minute = time.minute.toString().padLeft(2, '0');
+    final period = time.hour >= 12 ? 'PM' : 'AM';
+    return '$hour:$minute $period';
+  }
 
   @override
   Widget build(BuildContext context) {
     final state = context.watch<AppState>();
+
     return SafeArea(
       child: ListView(
         padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
@@ -22,13 +37,15 @@ class HomeScreen extends StatelessWidget {
           // Header
           Row(
             children: [
-              const Text(
+              Text(
                 'SIGNIFY',
                 style: TextStyle(
                   fontSize: 13,
                   fontWeight: FontWeight.w800,
                   letterSpacing: 2.4,
-                  color: AppColors.textDark,
+                  color:
+                      Theme.of(context).textTheme.bodyLarge?.color ??
+                      AppColors.textDark,
                 ),
               ),
               const Spacer(),
@@ -69,14 +86,7 @@ class HomeScreen extends StatelessWidget {
           const SizedBox(height: 20),
 
           // Hero card (tappable)
-          _HeroCard(
-            onTap:
-                onStartTranslation ??
-                () {
-                  // Fallback: navigate to Translate tab via MainShell
-                  DefaultTabController.maybeOf(context);
-                },
-          ),
+          _HeroCard(onTap: onStartTranslation ?? () {}),
           const SizedBox(height: 16),
 
           // Quick tiles
@@ -88,10 +98,8 @@ class HomeScreen extends StatelessWidget {
                   label: 'Emergency',
                   color: AppColors.red,
                   bg: AppColors.redSoft,
-                  onTap: () => Navigator.push(
-                    context,
-                    MaterialPageRoute(builder: (_) => const EmergencyScreen()),
-                  ),
+                  // Uses bottom nav instead of push
+                  onTap: onOpenEmergency ?? () {},
                 ),
               ),
               const SizedBox(width: 10),
@@ -99,12 +107,12 @@ class HomeScreen extends StatelessWidget {
                 child: _QuickTile(
                   icon: Icons.menu_book_rounded,
                   label: 'Phrasebook',
-                  color: AppColors.textDark,
-                  bg: Colors.white,
-                  onTap: () => Navigator.push(
-                    context,
-                    MaterialPageRoute(builder: (_) => const PhrasebookScreen()),
-                  ),
+                  color:
+                      Theme.of(context).textTheme.bodyLarge?.color ??
+                      AppColors.textDark,
+                  bg: Theme.of(context).cardColor,
+                  // Uses bottom nav instead of push
+                  onTap: onOpenPhrasebook ?? () {},
                 ),
               ),
               const SizedBox(width: 10),
@@ -112,8 +120,11 @@ class HomeScreen extends StatelessWidget {
                 child: _QuickTile(
                   icon: Icons.access_time_rounded,
                   label: 'History',
-                  color: AppColors.textDark,
-                  bg: Colors.white,
+                  color:
+                      Theme.of(context).textTheme.bodyLarge?.color ??
+                      AppColors.textDark,
+                  bg: Theme.of(context).cardColor,
+                  // History is NOT a bottom nav tab, so it still uses push
                   onTap: () => Navigator.push(
                     context,
                     MaterialPageRoute(builder: (_) => const HistoryScreen()),
@@ -135,14 +146,39 @@ class HomeScreen extends StatelessWidget {
           ),
           const SizedBox(height: 12),
 
-          ...state.history
-              .take(5)
-              .map(
-                (e) => Padding(
-                  padding: const EdgeInsets.only(bottom: 10),
-                  child: _RecentItem(entry: e),
+          // Dynamic Recent List
+          if (state.history.isEmpty)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 20),
+              child: Center(
+                child: Text(
+                  'No recent translations.\nGo to Translate and save a sentence!',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(fontSize: 13, color: AppColors.textSoft),
                 ),
               ),
+            )
+          else
+            ...state.history
+                .take(5)
+                .map(
+                  (e) => Padding(
+                    padding: const EdgeInsets.only(bottom: 10),
+                    child: InkWell(
+                      onTap: () => Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => const HistoryScreen(),
+                        ),
+                      ),
+                      borderRadius: BorderRadius.circular(14),
+                      child: _RecentItem(
+                        entry: e,
+                        formattedTime: _formatTime(e.time),
+                      ),
+                    ),
+                  ),
+                ),
         ],
       ),
     );
@@ -213,8 +249,6 @@ class _HeroCard extends StatelessWidget {
   }
 }
 
-/// A 21-landmark hand illustration matching MediaPipe's topology.
-/// Same purple accent as the original, now shaped like an actual hand.
 class _HandLandmarkIllustration extends StatelessWidget {
   const _HandLandmarkIllustration();
 
@@ -229,71 +263,62 @@ class _HandLandmarkIllustration extends StatelessWidget {
 }
 
 class _HandLandmarkPainter extends CustomPainter {
-  // MediaPipe 21-landmark hand topology, normalized within a 0..1 box.
-  // (x, y) coordinates laid out to look like an upright right hand.
   static const List<List<double>> _points = [
-    // 0 wrist
     [0.50, 0.95],
-    // 1-4 thumb
     [0.28, 0.86],
     [0.14, 0.75],
     [0.06, 0.62],
     [0.02, 0.48],
-    // 5-8 index
     [0.38, 0.55],
     [0.34, 0.40],
     [0.31, 0.27],
     [0.28, 0.14],
-    // 9-12 middle
     [0.53, 0.50],
     [0.53, 0.32],
     [0.53, 0.18],
     [0.53, 0.05],
-    // 13-16 ring
     [0.68, 0.55],
     [0.71, 0.40],
     [0.73, 0.28],
     [0.76, 0.15],
-    // 17-20 pinky
     [0.80, 0.64],
     [0.86, 0.54],
     [0.90, 0.44],
     [0.94, 0.34],
   ];
 
-  // Bone connections (MediaPipe HAND_CONNECTIONS)
   static const List<List<int>> _connections = [
-    // Palm (wrist to base of each finger)
     [0, 1],
     [0, 5],
     [0, 17],
     [5, 9],
     [9, 13],
     [13, 17],
-    // Thumb
-    [1, 2], [2, 3], [3, 4],
-    // Index
-    [5, 6], [6, 7], [7, 8],
-    // Middle
-    [9, 10], [10, 11], [11, 12],
-    // Ring
-    [13, 14], [14, 15], [15, 16],
-    // Pinky
-    [17, 18], [18, 19], [19, 20],
+    [1, 2],
+    [2, 3],
+    [3, 4],
+    [5, 6],
+    [6, 7],
+    [7, 8],
+    [9, 10],
+    [10, 11],
+    [11, 12],
+    [13, 14],
+    [14, 15],
+    [15, 16],
+    [17, 18],
+    [18, 19],
+    [19, 20],
   ];
 
   @override
   void paint(Canvas canvas, Size size) {
     final w = size.width;
     final h = size.height;
+    final offsets = _points
+        .map((p) => Offset(p[0] * w, p[1] * h))
+        .toList(growable: false);
 
-    // Convert normalized to screen coords
-    List<Offset> pts() =>
-        _points.map((p) => Offset(p[0] * w, p[1] * h)).toList(growable: false);
-
-    final offsets = pts();
-
-    // Bones
     final bonePaint = Paint()
       ..color = const Color(0xFF8B5CF6).withOpacity(0.55)
       ..strokeWidth = 1.5
@@ -304,16 +329,12 @@ class _HandLandmarkPainter extends CustomPainter {
       canvas.drawLine(offsets[c[0]], offsets[c[1]], bonePaint);
     }
 
-    // Glow behind dots
     final glow = Paint()
       ..color = const Color(0xFF8B5CF6).withOpacity(0.35)
       ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 6);
 
-    // Joints
     final jointPaint = Paint()..color = const Color(0xFFA78BFA);
     final tipPaint = Paint()..color = const Color(0xFFC4B5FD);
-
-    // Finger tips are 4, 8, 12, 16, 20. Wrist is 0.
     const tips = {4, 8, 12, 16, 20};
 
     for (int i = 0; i < offsets.length; i++) {
@@ -354,8 +375,12 @@ class _QuickTile extends StatelessWidget {
           padding: const EdgeInsets.symmetric(vertical: 18, horizontal: 8),
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(16),
-            border: bg == Colors.white
-                ? Border.all(color: AppColors.border)
+            border: bg == Theme.of(context).cardColor
+                ? Border.all(
+                    color: Theme.of(context).brightness == Brightness.dark
+                        ? Colors.white12
+                        : AppColors.border,
+                  )
                 : null,
           ),
           child: Column(
@@ -364,9 +389,10 @@ class _QuickTile extends StatelessWidget {
               const SizedBox(height: 8),
               Text(
                 label,
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 12,
                   fontWeight: FontWeight.w600,
+                  color: color,
                 ),
               ),
             ],
@@ -379,7 +405,8 @@ class _QuickTile extends StatelessWidget {
 
 class _RecentItem extends StatelessWidget {
   final TranslationEntry entry;
-  const _RecentItem({required this.entry});
+  final String formattedTime;
+  const _RecentItem({required this.entry, required this.formattedTime});
 
   String _emoji(String emo) {
     switch (emo.toLowerCase()) {
@@ -398,12 +425,14 @@ class _RecentItem extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: Theme.of(context).cardColor,
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: AppColors.border),
+        border: Border.all(color: isDark ? Colors.white12 : AppColors.border),
       ),
       child: Row(
         children: [
@@ -427,10 +456,15 @@ class _RecentItem extends StatelessWidget {
               children: [
                 Text(
                   entry.english,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 14,
                     fontWeight: FontWeight.w700,
+                    color:
+                        Theme.of(context).textTheme.bodyLarge?.color ??
+                        AppColors.textDark,
                   ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                 ),
                 const SizedBox(height: 2),
                 Text(
@@ -439,12 +473,14 @@ class _RecentItem extends StatelessWidget {
                     fontSize: 12,
                     color: AppColors.textSoft,
                   ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                 ),
               ],
             ),
           ),
           Text(
-            '${entry.time.hour}:${entry.time.minute.toString().padLeft(2, '0')}',
+            formattedTime,
             style: const TextStyle(fontSize: 11, color: AppColors.textSoft),
           ),
         ],

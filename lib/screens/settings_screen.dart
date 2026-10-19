@@ -217,6 +217,8 @@ class _Segmented extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
@@ -243,7 +245,7 @@ class _Segmented extends StatelessWidget {
           Container(
             padding: const EdgeInsets.all(3),
             decoration: BoxDecoration(
-              color: Theme.of(context).scaffoldBackgroundColor,
+              color: isDark ? AppColors.navy : AppColors.bg,
               borderRadius: BorderRadius.circular(10),
             ),
             child: Row(
@@ -255,10 +257,9 @@ class _Segmented extends StatelessWidget {
                     child: Container(
                       padding: const EdgeInsets.symmetric(vertical: 8),
                       decoration: BoxDecoration(
+                        // If active, it's always White or a bright highlight
                         color: active
-                            ? (Theme.of(context).brightness == Brightness.dark
-                                  ? AppColors.navyLight
-                                  : Colors.white)
+                            ? (isDark ? AppColors.blue : Colors.white)
                             : Colors.transparent,
                         borderRadius: BorderRadius.circular(8),
                         boxShadow: active
@@ -277,8 +278,9 @@ class _Segmented extends StatelessWidget {
                         style: TextStyle(
                           fontSize: 12,
                           fontWeight: FontWeight.w700,
+                          // Text color flips to white if active in dark mode
                           color: active
-                              ? (Theme.of(context).textTheme.bodyLarge?.color)
+                              ? (isDark ? Colors.white : AppColors.textDark)
                               : AppColors.textSoft,
                         ),
                       ),

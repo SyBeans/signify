@@ -24,8 +24,12 @@ class _MainShellState extends State<MainShell> {
   @override
   Widget build(BuildContext context) {
     final screens = [
-      // Home needs the callback to jump to the Translate tab
-      HomeScreen(onStartTranslation: () => _goToTab(2)),
+      // Home needs callbacks to jump to other tabs
+      HomeScreen(
+        onStartTranslation: () => _goToTab(2), // Translate
+        onOpenEmergency: () => _goToTab(1), // Emergency
+        onOpenPhrasebook: () => _goToTab(3), // Phrasebook
+      ),
       const EmergencyScreen(),
       TranslateScreen(isActive: _i == 2),
       const PhrasebookScreen(),

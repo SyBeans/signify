@@ -25,52 +25,61 @@ class SignifyBottomNav extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      decoration: const BoxDecoration(
-        color: Colors.white,
-        border: Border(top: BorderSide(color: AppColors.border)),
-      ),
-      padding: const EdgeInsets.symmetric(vertical: 8),
-      child: SafeArea(
-        top: false,
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.spaceAround,
-          children: List.generate(_items.length, (i) {
-            final item = _items[i];
-            final active = i == current;
-            final color = active
-                ? (item.isEmergency ? AppColors.red : AppColors.navy)
-                : AppColors.grey;
-            return InkWell(
-              onTap: () => onTap(i),
-              borderRadius: BorderRadius.circular(12),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 12,
-                  vertical: 6,
-                ),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(
-                      active ? item.active : item.icon,
-                      size: 22,
-                      color: color,
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      item.label,
-                      style: TextStyle(
-                        fontSize: 11,
+    // Wrap the entire bottom nav in withNoTextScaling so it doesn't break
+    return MediaQuery.withNoTextScaling(
+      child: Container(
+        decoration: const BoxDecoration(
+          color: Colors.white,
+          border: Border(top: BorderSide(color: AppColors.border)),
+        ),
+        padding: const EdgeInsets.symmetric(vertical: 8),
+        child: SafeArea(
+          top: false,
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceAround,
+            children: List.generate(_items.length, (i) {
+              final item = _items[i];
+              final active = i == current;
+              final color = active
+                  ? (item.isEmergency ? AppColors.red : AppColors.navy)
+                  : AppColors.grey;
+              return InkWell(
+                onTap: () => onTap(i),
+                borderRadius: BorderRadius.circular(12),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 6,
+                  ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        active ? item.active : item.icon,
+                        size: 22,
                         color: color,
-                        fontWeight: active ? FontWeight.w700 : FontWeight.w500,
                       ),
-                    ),
-                  ],
+                      const SizedBox(height: 2),
+                      // Added FittedBox just in case the phone is very narrow
+                      FittedBox(
+                        fit: BoxFit.scaleDown,
+                        child: Text(
+                          item.label,
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: color,
+                            fontWeight: active
+                                ? FontWeight.w700
+                                : FontWeight.w500,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
-              ),
-            );
-          }),
+              );
+            }),
+          ),
         ),
       ),
     );
