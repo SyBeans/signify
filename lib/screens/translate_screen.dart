@@ -150,11 +150,32 @@ class _TranslateScreenState extends State<TranslateScreen> {
       delegate: HandLandmarkerDelegate.gpu,
     );
 
+    // ── HAND DUPLICATE FILTER (Fixes horizontal hand hallucination) ──
     _handSub ??= _handPlugin!.landmarkStream.listen((hands) {
       final lms = <LandmarkPoint>[];
-      for (final hand in hands) {
-        for (final lm in hand.landmarks) {
+
+      if (hands.isNotEmpty) {
+        // Always add the first hand
+        for (final lm in hands[0].landmarks) {
           lms.add(LandmarkPoint(lm.x, lm.y, lm.z));
+        }
+
+        // Check if a 2nd hand is real or a hallucination
+        if (hands.length > 1) {
+          final h1Wrist = hands[0].landmarks[0]; // Wrist of first hand
+          final h2Wrist = hands[1].landmarks[0]; // Wrist of second hand
+
+          // Calculate Euclidean distance between the two wrists
+          final dx = h1Wrist.x - h2Wrist.x;
+          final dy = h1Wrist.y - h2Wrist.y;
+          final dist = math.sqrt(dx * dx + dy * dy);
+
+          // If distance > 0.12, it's a real second hand. If < 0.12, it's a fake overlapping hand.
+          if (dist > 0.12) {
+            for (final lm in hands[1].landmarks) {
+              lms.add(LandmarkPoint(lm.x, lm.y, lm.z));
+            }
+          }
         }
       }
       _handLandmarks = lms;
@@ -197,22 +218,21 @@ class _TranslateScreenState extends State<TranslateScreen> {
       final frameW = image.width.toDouble();
       final frameH = image.height.toDouble();
 
-      if (faces != null) {
-        for (final face in faces) {
-          final mesh = face.mesh;
-          if (mesh != null) {
-            for (final p in mesh.points) {
-              final px = p.x ?? 0.0;
-              final py = p.y ?? 0.0;
-              final pz = p.z ?? 0.0;
-              faceOut.add(
-                LandmarkPoint(
-                  (px > 1.5) ? (px / frameW) : px,
-                  (py > 1.5) ? (py / frameH) : py,
-                  pz,
-                ),
-              );
-            }
+      // ── FACE DUPLICATE FILTER (Only take the first, most prominent face) ──
+      if (faces != null && faces.isNotEmpty) {
+        final mesh = faces.first.mesh; // <-- ONLY TAKE THE FIRST FACE
+        if (mesh != null) {
+          for (final p in mesh.points) {
+            final px = p.x ?? 0.0;
+            final py = p.y ?? 0.0;
+            final pz = p.z ?? 0.0;
+            faceOut.add(
+              LandmarkPoint(
+                (px > 1.5) ? (px / frameW) : px,
+                (py > 1.5) ? (py / frameH) : py,
+                pz,
+              ),
+            );
           }
         }
       }
