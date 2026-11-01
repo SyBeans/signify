@@ -25,6 +25,10 @@ dependencies:
   #Utilities
   intl: ^0.19.0 
 
+  # SMS & GPS for Emergency
+  flutter_sms: ^2.3.3
+  geolocator: ^13.0.1
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

@@ -1,5 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:geolocator/geolocator.dart';
+import 'package:flutter_sms/flutter_sms.dart';
 import 'package:provider/provider.dart';
 import '../providers/app_state.dart';
 import '../services/tts_service.dart';
@@ -20,10 +22,15 @@ class _EmergencyScreenState extends State<EmergencyScreen> {
   ];
 
   final TextEditingController _noteController = TextEditingController();
+
   String? _lastTapped;
   Timer? _tapClearTimer;
   String? _speakingPhrase;
   Timer? _speakClearTimer;
+
+  // SMS & GPS State
+  bool _isSending = false;
+  String _gpsStatus = 'Waiting...';
 
   @override
   void dispose() {
@@ -33,36 +40,199 @@ class _EmergencyScreenState extends State<EmergencyScreen> {
     super.dispose();
   }
 
-  void _flashTap(String key) {
-    setState(() => _lastTapped = key);
-    _tapClearTimer?.cancel();
-    _tapClearTimer = Timer(const Duration(milliseconds: 600), () {
-      if (mounted) setState(() => _lastTapped = null);
-    });
+  // ═══════════════════════════════════════════════════════════
+  // GPS & SMS LOGIC
+  // ═══════════════════════════════════════════════════════════
+
+  Future<Position?> _getLocation() async {
+    bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+    if (!serviceEnabled) {
+      setState(() => _gpsStatus = 'GPS Disabled');
+
+      // --- NEW: Prompt the user to turn on GPS ---
+      if (mounted) {
+        bool? turnOn = await showDialog<bool>(
+          context: context,
+          barrierDismissible: false,
+          builder: (ctx) => AlertDialog(
+            title: const Text('Location is OFF'),
+            content: const Text(
+              'Your phone\'s location is turned off.\n\n'
+              'Without it, your emergency contacts will not receive your Google Maps link.\n\n'
+              'Do you want to turn it on now?',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: const Text('Skip'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.pop(ctx, true),
+                child: const Text('Turn On'),
+              ),
+            ],
+          ),
+        );
+
+        if (turnOn == true) {
+          // Open the phone's location settings
+          await Geolocator.openLocationSettings();
+
+          // Wait a moment for the user to turn it on
+          await Future.delayed(const Duration(seconds: 2));
+
+          // Check again after they return
+          bool enabledNow = await Geolocator.isLocationServiceEnabled();
+          if (!enabledNow) {
+            setState(() => _gpsStatus = 'GPS Still Disabled');
+            return null;
+          }
+        } else {
+          return null; // User chose to skip
+        }
+      }
+    }
+
+    LocationPermission permission = await Geolocator.checkPermission();
+    if (permission == LocationPermission.denied) {
+      permission = await Geolocator.requestPermission();
+      if (permission == LocationPermission.denied) {
+        setState(() => _gpsStatus = 'Permission Denied');
+        return null;
+      }
+    }
+    if (permission == LocationPermission.deniedForever) {
+      setState(() => _gpsStatus = 'Permission Permanently Denied');
+      return null;
+    }
+
+    setState(() => _gpsStatus = 'Acquiring...');
+    try {
+      final position = await Geolocator.getCurrentPosition(
+        desiredAccuracy: LocationAccuracy.high,
+        timeLimit: const Duration(seconds: 30),
+      );
+      setState(() => _gpsStatus = 'Location Acquired');
+      return position;
+    } catch (e) {
+      setState(() => _gpsStatus = 'GPS Failed');
+      return null;
+    }
   }
 
-  Future<void> _speakPhrase(AppState state, String en, String fil) async {
-    final text = state.speechLanguage == 'fil' ? fil : en;
-    setState(() => _speakingPhrase = en);
-    final estimated = Duration(
-      milliseconds: (text.length * 80).clamp(1500, 8000),
-    );
-    await TtsService.speak(
-      text,
-      lang: state.speechLanguage,
-      speed: state.speechSpeed,
-    );
-    _speakClearTimer?.cancel();
-    _speakClearTimer = Timer(estimated, () {
-      if (mounted && _speakingPhrase == en)
-        setState(() => _speakingPhrase = null);
+  Future<void> _sendEmergencyAlert(AppState state, String note) async {
+    setState(() {
+      _isSending = true;
+      _gpsStatus = 'Waiting...';
     });
+
+    // 1. Get GPS Location (if enabled)
+    Position? position;
+    if (state.includeGps) {
+      position = await _getLocation();
+    }
+
+    // 2. Build the SMS Body
+    String locationLink = 'GPS Unavailable';
+    if (position != null) {
+      locationLink =
+          'https://maps.google.com/?q=${position.latitude},${position.longitude}';
+    }
+
+    final baseMessage = '🚨 EMERGENCY!\n${state.userName} needs help!';
+    final notePart = note.isNotEmpty ? '\nNote: $note' : '';
+    final locationPart = '\n📍 Location: $locationLink';
+    final timePart = '\n⏰ Time: ${DateTime.now().toString().substring(11, 16)}';
+
+    final finalMessage = '$baseMessage$notePart$locationPart$timePart';
+
+    // 3. Get Recipients
+    final recipients = state.contacts.map((c) => c.phone).toList();
+    if (recipients.isEmpty) {
+      setState(() => _isSending = false);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('❌ No emergency contacts saved!'),
+            backgroundColor: AppColors.red,
+          ),
+        );
+      }
+      return;
+    }
+
+    // 4. Send SMS
+    try {
+      await sendSMS(
+        message: finalMessage,
+        recipients: recipients,
+        sendDirect: true,
+      );
+
+      if (mounted) {
+        setState(() => _isSending = false);
+        _showSuccessDialog(recipients.length, position != null);
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() => _isSending = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('❌ SMS Failed: $e'),
+            backgroundColor: AppColors.red,
+          ),
+        );
+      }
+    }
+  }
+
+  void _showSuccessDialog(int contactCount, bool hasGps) {
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Row(
+          children: [
+            Icon(Icons.check_circle, color: AppColors.green, size: 24),
+            SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                'Alert Sent!',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+              ),
+            ),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'SMS sent to $contactCount contacts.',
+              style: const TextStyle(fontSize: 14),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              hasGps ? '📍 GPS location included' : '⚠️ GPS was not available',
+              style: TextStyle(
+                fontSize: 12,
+                color: hasGps ? AppColors.green : AppColors.orange,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
   }
 
   void _showSendDialog(AppState state) {
     final note = _noteController.text.trim();
-    final smsBody =
-        '🚨 EMERGENCY!\n${state.userName} needs help!${note.isEmpty ? '' : '\nNote: $note'}';
 
     showDialog<void>(
       context: context,
@@ -107,15 +277,6 @@ class _EmergencyScreenState extends State<EmergencyScreen> {
                 ),
               ),
               const SizedBox(height: 14),
-              const Text(
-                'Message preview:',
-                style: TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w700,
-                  color: AppColors.textSoft,
-                ),
-              ),
-              const SizedBox(height: 6),
               Container(
                 padding: const EdgeInsets.all(10),
                 decoration: BoxDecoration(
@@ -124,7 +285,9 @@ class _EmergencyScreenState extends State<EmergencyScreen> {
                   border: Border.all(color: AppColors.border),
                 ),
                 child: Text(
-                  '$smsBody\n📍 Location: https://maps.google.com/?q=…',
+                  '🚨 EMERGENCY!\n${state.userName} needs help!'
+                  '${note.isNotEmpty ? '\nNote: $note' : ''}'
+                  '\n📍 Location: https://maps.google.com/?q=...',
                   style: const TextStyle(fontSize: 12, height: 1.35),
                 ),
               ),
@@ -143,22 +306,46 @@ class _EmergencyScreenState extends State<EmergencyScreen> {
             ),
             onPressed: () {
               Navigator.pop(ctx);
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  backgroundColor: AppColors.red,
-                  duration: const Duration(seconds: 3),
-                  content: Text(
-                    '🚨 Demo: SMS queued to ${state.contacts.length} contacts${note.isNotEmpty ? ' (with note)' : ''}',
-                    style: const TextStyle(color: Colors.white),
-                  ),
-                ),
-              );
+              _sendEmergencyAlert(state, note);
             },
             child: const Text('SEND NOW'),
           ),
         ],
       ),
     );
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  // UI HELPERS
+  // ═══════════════════════════════════════════════════════════
+
+  void _flashTap(String key) {
+    setState(() => _lastTapped = key);
+    _tapClearTimer?.cancel();
+    _tapClearTimer = Timer(const Duration(milliseconds: 600), () {
+      if (mounted) setState(() => _lastTapped = null);
+    });
+  }
+
+  Future<void> _speakPhrase(AppState state, String en, String fil) async {
+    final text = state.speechLanguage == 'fil' ? fil : en;
+    setState(() => _speakingPhrase = en);
+    final estimated = Duration(
+      milliseconds: (text.length * 80).clamp(1500, 8000),
+    );
+
+    await TtsService.speak(
+      text,
+      lang: state.speechLanguage,
+      speed: state.speechSpeed,
+    );
+
+    _speakClearTimer?.cancel();
+    _speakClearTimer = Timer(estimated, () {
+      if (mounted && _speakingPhrase == en) {
+        setState(() => _speakingPhrase = null);
+      }
+    });
   }
 
   @override
@@ -172,6 +359,7 @@ class _EmergencyScreenState extends State<EmergencyScreen> {
         bottom: false,
         child: Column(
           children: [
+            // ── Red top banner ──
             Container(
               width: double.infinity,
               padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
@@ -250,6 +438,8 @@ class _EmergencyScreenState extends State<EmergencyScreen> {
                 ],
               ),
             ),
+
+            // ── Content (Dark Mode Supported) ──
             Expanded(
               child: Container(
                 decoration: BoxDecoration(
@@ -261,12 +451,13 @@ class _EmergencyScreenState extends State<EmergencyScreen> {
                 child: ListView(
                   padding: const EdgeInsets.all(20),
                   children: [
+                    // ── Big alert card ──
                     Material(
                       color: isDark ? AppColors.navyLight : AppColors.navy,
                       borderRadius: BorderRadius.circular(16),
                       child: InkWell(
                         borderRadius: BorderRadius.circular(16),
-                        onTap: () => _showSendDialog(state),
+                        onTap: _isSending ? null : () => _showSendDialog(state),
                         child: Padding(
                           padding: const EdgeInsets.all(16),
                           child: Row(
@@ -278,28 +469,40 @@ class _EmergencyScreenState extends State<EmergencyScreen> {
                                   color: AppColors.red,
                                   borderRadius: BorderRadius.circular(12),
                                 ),
-                                child: const Icon(
-                                  Icons.warning_amber_rounded,
-                                  color: Colors.white,
-                                ),
+                                child: _isSending
+                                    ? const Padding(
+                                        padding: EdgeInsets.all(12),
+                                        child: CircularProgressIndicator(
+                                          color: Colors.white,
+                                          strokeWidth: 2,
+                                        ),
+                                      )
+                                    : const Icon(
+                                        Icons.warning_amber_rounded,
+                                        color: Colors.white,
+                                      ),
                               ),
                               const SizedBox(width: 12),
-                              const Expanded(
+                              Expanded(
                                 child: Column(
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
                                     Text(
-                                      'SEND EMERGENCY ALERT',
-                                      style: TextStyle(
+                                      _isSending
+                                          ? 'SENDING...'
+                                          : 'SEND EMERGENCY ALERT',
+                                      style: const TextStyle(
                                         fontSize: 14,
                                         fontWeight: FontWeight.w800,
                                         color: Colors.white,
                                       ),
                                     ),
-                                    SizedBox(height: 4),
+                                    const SizedBox(height: 4),
                                     Text(
-                                      'SMS + location to 3 emergency contacts',
-                                      style: TextStyle(
+                                      _isSending
+                                          ? 'Acquiring GPS & sending SMS'
+                                          : 'SMS + location to ${state.contacts.length} contacts',
+                                      style: const TextStyle(
                                         fontSize: 11,
                                         color: Colors.white70,
                                       ),
@@ -317,6 +520,8 @@ class _EmergencyScreenState extends State<EmergencyScreen> {
                       ),
                     ),
                     const SizedBox(height: 12),
+
+                    // ── Optional note ──
                     const Text(
                       'NOTE (OPTIONAL)',
                       style: TextStyle(
@@ -373,6 +578,8 @@ class _EmergencyScreenState extends State<EmergencyScreen> {
                       ),
                     ),
                     const SizedBox(height: 12),
+
+                    // ── GPS status ──
                     Container(
                       padding: const EdgeInsets.all(14),
                       decoration: BoxDecoration(
@@ -394,7 +601,7 @@ class _EmergencyScreenState extends State<EmergencyScreen> {
                               ),
                               const SizedBox(width: 6),
                               Text(
-                                'ACQUIRING GPS LOCATION',
+                                'GPS STATUS',
                                 style: TextStyle(
                                   fontSize: 11,
                                   fontWeight: FontWeight.w700,
@@ -405,12 +612,22 @@ class _EmergencyScreenState extends State<EmergencyScreen> {
                                 ),
                               ),
                               const Spacer(),
-                              const Text(
-                                '8m accuracy',
+                              Text(
+                                !state.includeGps
+                                    ? 'Disabled in Settings'
+                                    : (_gpsStatus == 'Waiting...'
+                                          ? 'Ready'
+                                          : _gpsStatus),
                                 style: TextStyle(
                                   fontSize: 11,
                                   fontWeight: FontWeight.w700,
-                                  color: AppColors.green,
+                                  color:
+                                      (!state.includeGps ||
+                                          _gpsStatus == 'GPS Failed')
+                                      ? AppColors.grey
+                                      : (_gpsStatus == 'Location Acquired'
+                                            ? AppColors.green
+                                            : AppColors.orange),
                                 ),
                               ),
                             ],
@@ -419,7 +636,9 @@ class _EmergencyScreenState extends State<EmergencyScreen> {
                           ClipRRect(
                             borderRadius: BorderRadius.circular(4),
                             child: LinearProgressIndicator(
-                              value: 0.8,
+                              value: _gpsStatus == 'Location Acquired'
+                                  ? 1.0
+                                  : (_gpsStatus == 'Acquiring...' ? 0.5 : 0.0),
                               minHeight: 5,
                               backgroundColor: isDark
                                   ? Colors.white12
@@ -433,6 +652,8 @@ class _EmergencyScreenState extends State<EmergencyScreen> {
                       ),
                     ),
                     const SizedBox(height: 16),
+
+                    // ── Contacts ──
                     Row(
                       children: state.contacts.map((c) {
                         final initial = c.name.isNotEmpty
@@ -505,6 +726,7 @@ class _EmergencyScreenState extends State<EmergencyScreen> {
                       }).toList(),
                     ),
                     const SizedBox(height: 24),
+
                     const Text(
                       'OR SPEAK A PHRASE',
                       style: TextStyle(
@@ -515,6 +737,7 @@ class _EmergencyScreenState extends State<EmergencyScreen> {
                       ),
                     ),
                     const SizedBox(height: 12),
+
                     ..._phrases.map(
                       (p) => Padding(
                         padding: const EdgeInsets.only(bottom: 10),
@@ -546,6 +769,7 @@ class _EmergencyPhrase extends StatelessWidget {
   final bool isSpeaking;
   final VoidCallback onTap;
   final VoidCallback onSpeak;
+
   const _EmergencyPhrase({
     required this.en,
     required this.fil,
@@ -554,6 +778,7 @@ class _EmergencyPhrase extends StatelessWidget {
     required this.onTap,
     required this.onSpeak,
   });
+
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
@@ -619,6 +844,7 @@ class _SpeakButton extends StatefulWidget {
 class _SpeakButtonState extends State<_SpeakButton>
     with SingleTickerProviderStateMixin {
   late AnimationController _pulseController;
+
   @override
   void initState() {
     super.initState();
