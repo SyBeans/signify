@@ -65,7 +65,7 @@ const Map<String, String> englishToFilipino = {
   'WOMAN': 'Babae',
   'DEAF': 'Bingi',
   'HARD OF HEARING': 'Mahina ang pandinig',
-  'WEELCHAIR PERSON': 'Taong may wheelchair',
+  'WHEELCHAIR PERSON': 'Taong may wheelchair',
   'BLIND': 'Bulag', 'DEAF BLIND': 'Bingi at bulag', 'MARRIED': 'Kasal',
 
   // Colors

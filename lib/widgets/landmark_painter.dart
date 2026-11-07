@@ -22,29 +22,22 @@ class LandmarkPainter extends CustomPainter {
     required this.isFrontCamera,
   });
 
-  static const _handConnections = [
-    [0, 1],
-    [1, 2],
-    [2, 3],
-    [3, 4],
-    [0, 5],
-    [5, 6],
-    [6, 7],
-    [7, 8],
-    [5, 9],
-    [9, 10],
-    [10, 11],
-    [11, 12],
-    [9, 13],
-    [13, 14],
-    [14, 15],
-    [15, 16],
-    [13, 17],
-    [17, 18],
-    [18, 19],
-    [19, 20],
-    [0, 17],
-  ];
+  // ── 5 face reference points (matches plugin_test + test_webcam) ──
+  //   10  = forehead
+  //   234 = left cheek
+  //   152 = chin
+  //   454 = right cheek
+  //   1   = nose tip
+  static const _faceIndices = [10, 234, 152, 454, 1];
+
+  // ── 6 hand reference points per hand (matches plugin_test) ──
+  //   0  = wrist
+  //   4  = thumb tip
+  //   8  = index finger tip
+  //   12 = middle finger tip
+  //   16 = ring finger tip
+  //   20 = pinky tip
+  static const _handIndices = [0, 4, 8, 12, 16, 20];
 
   Offset _rotate(double x, double y) {
     if (isFrontCamera) {
@@ -136,23 +129,31 @@ class LandmarkPainter extends CustomPainter {
       );
     }
 
-    // ─── Face ───
-    final facePaint = Paint()
-      ..color = Colors.red.withOpacity(LandmarkConfig.faceDotOpacity);
-    for (final lm in faceLandmarks) {
-      canvas.drawCircle(
-        _mapFace(lm, scaledW, scaledH, offsetX, offsetY),
-        LandmarkConfig.faceDotRadius,
-        facePaint,
-      );
+    // ─── FACE: 5 dots with white center ───
+    if (faceLandmarks.length >= 455) {
+      final facePaint = Paint()
+        ..color = Colors.red.withOpacity(LandmarkConfig.faceDotOpacity)
+        ..style = PaintingStyle.fill;
+      final faceInner = Paint()..color = Colors.white;
+
+      for (final idx in _faceIndices) {
+        final p = _mapFace(
+          faceLandmarks[idx],
+          scaledW,
+          scaledH,
+          offsetX,
+          offsetY,
+        );
+        canvas.drawCircle(p, LandmarkConfig.faceDotRadius, facePaint);
+        canvas.drawCircle(p, 1.0, faceInner);
+      }
     }
 
-    // ─── Hands ───
-    final handDot = Paint()..color = Colors.green;
-    final handLine = Paint()
-      ..color = Colors.green.withOpacity(0.7)
-      ..strokeWidth = 2.0
-      ..style = PaintingStyle.stroke;
+    // ─── HANDS: 6 dots per hand with white center, no lines ───
+    final handPaint = Paint()
+      ..color = Colors.green
+      ..style = PaintingStyle.fill;
+    final handInner = Paint()..color = Colors.white;
 
     const perHand = 21;
     const rejectRadius = 0.35;
@@ -160,6 +161,7 @@ class LandmarkPainter extends CustomPainter {
     for (int h = 0; h + perHand <= handLandmarks.length; h += perHand) {
       final slice = handLandmarks.sublist(h, h + perHand);
 
+      // Centroid for the reject-radius hallucination filter
       double cx = 0, cy = 0;
       for (final lm in slice) {
         cx += lm.x;
@@ -169,32 +171,15 @@ class LandmarkPainter extends CustomPainter {
       cy /= slice.length;
       final anchor = Offset(cx, cy);
 
-      final pts = <Offset?>[];
-      for (final lm in slice) {
+      for (final idx in _handIndices) {
+        final lm = slice[idx];
         final dx = (lm.x - cx).abs();
         final dy = (lm.y - cy).abs();
-        if (dx > rejectRadius || dy > rejectRadius) {
-          pts.add(null);
-          continue;
-        }
-        pts.add(_mapHand(lm, scaledW, scaledH, offsetX, offsetY, anchor));
-      }
+        if (dx > rejectRadius || dy > rejectRadius) continue;
 
-      for (final c in _handConnections) {
-        final a = pts[c[0]];
-        final b = pts[c[1]];
-        if (a != null && b != null) canvas.drawLine(a, b, handLine);
-      }
-      for (int i = 0; i < pts.length; i++) {
-        final p = pts[i];
-        if (p == null) continue;
-        final isTip =
-            i == 0 || i == 4 || i == 8 || i == 12 || i == 16 || i == 20;
-        canvas.drawCircle(
-          p,
-          isTip ? LandmarkConfig.handTipRadius : LandmarkConfig.handJointRadius,
-          handDot,
-        );
+        final p = _mapHand(lm, scaledW, scaledH, offsetX, offsetY, anchor);
+        canvas.drawCircle(p, LandmarkConfig.handTipRadius, handPaint);
+        canvas.drawCircle(p, 1.5, handInner);
       }
     }
   }

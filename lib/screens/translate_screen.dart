@@ -41,10 +41,19 @@ class _TranslateScreenState extends State<TranslateScreen> {
 
   List<CameraDescription> _cameras = [];
   int _cameraIndex = 0;
-  int _resIndex = LandmarkConfig.defaultResolutionIndex;
+
+  // OVERRIDE to LOW (index 0) to match validated plugin_test perf profile.
+  // Was: LandmarkConfig.defaultResolutionIndex. Keep in sync with config if
+  // you want the default persisted across restarts.
+  int _resIndex = 0;
+
   bool _isSwitching = false;
   bool _isProcessing = false;
+
+  // _frameCounter → raw frames (drives skip logic)
+  // _processFrameCounter → processed frames (drives alternating)
   int _frameCounter = 0;
+  int _processFrameCounter = 0;
 
   List<LandmarkPoint> _faceLandmarks = [];
   List<LandmarkPoint> _handLandmarks = [];
@@ -59,6 +68,7 @@ class _TranslateScreenState extends State<TranslateScreen> {
   int _signPredictCounter = 0;
   int _signCooldownUntil = 0;
   final List<String> _signVoteBuffer = [];
+  int _framesSinceHandSeen = 0;
 
   bool _isEmotionInFlight = false;
   int _emotionFrameCounter = 0;
@@ -81,6 +91,26 @@ class _TranslateScreenState extends State<TranslateScreen> {
   bool get _faceDetected => _faceLandmarks.isNotEmpty;
   bool get _cameraReady =>
       _controller != null && _controller!.value.isInitialized;
+
+  // ══════════════════════════════════════════════════════════
+  // RESOLUTION-AWARE PERFORMANCE TUNING
+  // ══════════════════════════════════════════════════════════
+  // LOW  (index 0, ~240p) → webcam-style: process every frame,
+  //                          alternate hands/face per processed frame,
+  //                          emotion every 3rd face frame
+  // MED  (index 1, ~480p) → skip every 2nd raw frame, hands every
+  //                          processed frame, face every 2nd processed
+  //                          frame, emotion every 5th face frame
+  // HIGH (index 2, ~720p) → same as MED
+  //
+  // VALIDATED ON TECNO CK7n:
+  //   LOW  → ~15 FPS  (usable for signing)
+  //   MED  → ~5 FPS
+  //   HIGH → ~5 FPS
+  // ══════════════════════════════════════════════════════════
+  int get _rawFrameSkipMod => _resIndex == 0 ? 1 : 2;
+  bool get _alternateMediaPipe => _resIndex == 0;
+  int get _effectiveEmotionSkip => _resIndex == 0 ? 3 : 5;
 
   @override
   void initState() {
@@ -195,37 +225,60 @@ class _TranslateScreenState extends State<TranslateScreen> {
 
   Future<void> _processFrame(CameraImage image) async {
     if (_isProcessing || _isSwitching) return;
+
+    // ── Resolution-aware raw frame skip ──
     _frameCounter++;
-    if (_frameCounter % (LandmarkConfig.frameSkip + 1) != 0) return;
+    if (_frameCounter % _rawFrameSkipMod != 0) return;
 
     _isProcessing = true;
     try {
-      try {
-        _handPlugin?.processFrame(
-          image,
-          _controller!.description.sensorOrientation,
-        );
-      } catch (_) {}
+      _processFrameCounter++;
 
-      final faces = await _faceDetector?.detectFacesFromCameraImage(image);
+      // ── Decide which MediaPipe runs this frame ──
+      final bool isHandFrame;
+      final bool isFaceFrame;
+      if (_alternateMediaPipe) {
+        // LOW: webcam-style alternating (one model per frame)
+        isHandFrame = (_processFrameCounter % 2 == 0);
+        isFaceFrame = (_processFrameCounter % 2 == 1);
+      } else {
+        // MED/HIGH: hands every processed frame, face every 2nd
+        isHandFrame = true;
+        isFaceFrame = (_processFrameCounter % 2 == 0);
+      }
+
+      // ── Hands ──
+      if (isHandFrame) {
+        try {
+          _handPlugin?.processFrame(
+            image,
+            _controller!.description.sensorOrientation,
+          );
+        } catch (_) {}
+      }
+
+      // ── Face ──
       final faceOut = <LandmarkPoint>[];
-      final frameW = image.width.toDouble();
-      final frameH = image.height.toDouble();
+      if (isFaceFrame) {
+        final faces = await _faceDetector?.detectFacesFromCameraImage(image);
+        final frameW = image.width.toDouble();
+        final frameH = image.height.toDouble();
 
-      if (faces != null && faces.isNotEmpty) {
-        final mesh = faces.first.mesh;
-        if (mesh != null) {
-          for (final p in mesh.points) {
-            final px = p.x ?? 0.0;
-            final py = p.y ?? 0.0;
-            final pz = p.z ?? 0.0;
-            faceOut.add(
-              LandmarkPoint(
-                (px > 1.5) ? (px / frameW) : px,
-                (py > 1.5) ? (py / frameH) : py,
-                pz,
-              ),
-            );
+        if (faces != null && faces.isNotEmpty) {
+          final mesh = faces.first.mesh;
+          if (mesh != null) {
+            for (final p in mesh.points) {
+              final px = p.x ?? 0.0;
+              final py = p.y ?? 0.0;
+              final pz = p.z ?? 0.0;
+              faceOut.add(
+                LandmarkPoint(
+                  (px > 1.5) ? (px / frameW) : px,
+                  (py > 1.5) ? (py / frameH) : py,
+                  pz,
+                ),
+              );
+            }
           }
         }
       }
@@ -240,14 +293,16 @@ class _TranslateScreenState extends State<TranslateScreen> {
 
       if (mounted) {
         setState(() {
-          _faceLandmarks = faceOut;
+          // Only refresh the face overlay on face frames (avoids flicker)
+          if (isFaceFrame) _faceLandmarks = faceOut;
+          // Trigger rebuild so hand stream updates land in the UI
           _handLandmarks = List.from(_handLandmarks);
         });
       }
 
       if (_modelsReady) {
-        _updateSignStream(image, faceOut);
-        _updateEmotion(image, faceOut);
+        if (isHandFrame) _updateSignStream(image, faceOut);
+        if (isFaceFrame) _updateEmotion(image, faceOut);
         _checkHandDropForAutoSave();
       }
     } catch (e) {
@@ -316,15 +371,25 @@ class _TranslateScreenState extends State<TranslateScreen> {
     final bufferLimitMs = (4.0 * 1000).toInt();
     _signBuffer.removeWhere((e) => nowMs - e.key > bufferLimitMs);
 
+    // Hand-drop delay: wait 6 frames before wiping buffer/votes/top-3
+    // (matches HAND_DROP_DELAY in test_webcam_combined.py)
     if (_handLandmarks.isEmpty) {
-      if (_signBuffer.isNotEmpty) {
-        _signBuffer.clear();
-        _signMotionHistory.clear();
-        _lastSignPositions = null;
-        _signPredictCounter = 0;
+      _framesSinceHandSeen++;
+      if (_framesSinceHandSeen >= 6) {
+        if (_signBuffer.isNotEmpty ||
+            _signVoteBuffer.isNotEmpty ||
+            _topPredictions.isNotEmpty) {
+          _signBuffer.clear();
+          _signVoteBuffer.clear();
+          _signMotionHistory.clear();
+          _lastSignPositions = null;
+          _signPredictCounter = 0;
+          if (mounted) setState(() => _topPredictions = []);
+        }
       }
       return;
     }
+    _framesSinceHandSeen = 0;
 
     final frame = List<double>.filled(126, 0.0);
     final handCount = _handLandmarks.length ~/ 21;
@@ -332,8 +397,20 @@ class _TranslateScreenState extends State<TranslateScreen> {
       for (int i = 0; i < 21; i++) {
         final lm = _handLandmarks[h * 21 + i];
         final base = h * 63 + i * 3;
-        frame[base + 0] = lm.x;
-        frame[base + 1] = lm.y;
+
+        // ORIENTATION FIX: un-rotate portrait → landscape, then mirror x
+        // (matches cv2.flip(frame, 1) in test_webcam_combined.py)
+        double lx, ly;
+        if (_isFrontCamera) {
+          lx = 1.0 - lm.y;
+          ly = 1.0 - lm.x;
+        } else {
+          lx = lm.y;
+          ly = lm.x;
+        }
+
+        frame[base + 0] = lx;
+        frame[base + 1] = ly;
         frame[base + 2] = lm.z;
       }
     }
@@ -459,7 +536,7 @@ class _TranslateScreenState extends State<TranslateScreen> {
   ) async {
     if (faceOut.length < 400 || _isEmotionInFlight) return;
     _emotionFrameCounter++;
-    if (_emotionFrameCounter % 5 != 0) return;
+    if (_emotionFrameCounter % _effectiveEmotionSkip != 0) return;
 
     _isEmotionInFlight = true;
     try {
@@ -520,16 +597,9 @@ class _TranslateScreenState extends State<TranslateScreen> {
       final result = _emotionService.predict(raw, lmVec);
       if (result != null) {
         final (_, _, rawProbs) = result;
-        final weighted = List<double>.filled(4, 0.0);
-        double wSum = 0.0;
-        final weights = [1.0, 0.50, 1.0, 1.50];
-        for (int i = 0; i < 4; i++) {
-          weighted[i] = rawProbs[i] * weights[i];
-          wSum += weighted[i];
-        }
-        if (wSum > 0) {
-          for (int i = 0; i < 4; i++) weighted[i] /= wSum;
-        }
+
+        // v11.8 was balanced at TRAINING time — no post-softmax re-weighting.
+        final weighted = rawProbs;
 
         int frameIdx = 0;
         double frameTop = weighted[0];
@@ -568,7 +638,11 @@ class _TranslateScreenState extends State<TranslateScreen> {
 
   Future<void> _switchCamera() async {
     if (_isSwitching || _cameras.length < 2) return;
-    setState(() => _isSwitching = true);
+    setState(() {
+      _isSwitching = true;
+      _frameCounter = 0;
+      _processFrameCounter = 0;
+    });
     try {
       await _controller?.stopImageStream();
     } catch (_) {}
@@ -583,6 +657,8 @@ class _TranslateScreenState extends State<TranslateScreen> {
     setState(() {
       _isSwitching = true;
       _resIndex = newIndex;
+      _frameCounter = 0;
+      _processFrameCounter = 0;
     });
     try {
       await _controller?.stopImageStream();
@@ -602,6 +678,9 @@ class _TranslateScreenState extends State<TranslateScreen> {
     super.dispose();
   }
 
+  // ────────────────────────────────────────────────────────────
+  // BUILD — unchanged from previous version
+  // ────────────────────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
     final state = context.watch<AppState>();
@@ -1047,7 +1126,6 @@ class _TranslateScreenState extends State<TranslateScreen> {
                                                   style: TextStyle(
                                                     fontSize: 22,
                                                     fontWeight: FontWeight.w800,
-                                                    // CLEAN WHITE/DARK TEXT (No background)
                                                     color:
                                                         Theme.of(context)
                                                             .textTheme
