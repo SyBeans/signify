@@ -24,7 +24,29 @@ class EmotionModelService {
     final modelData = await rootBundle.load(
       'assets/models/emotion_model.tflite',
     );
-    _interpreter = Interpreter.fromBuffer(modelData.buffer.asUint8List());
+
+    // ── Try GPU, Fallback to CPU ──
+    try {
+      final options = InterpreterOptions();
+      options.addDelegate(GpuDelegateV2());
+      debugPrint('⏳ EMO-MODEL: Attempting GPU Delegate...');
+
+      _interpreter = Interpreter.fromBuffer(
+        modelData.buffer.asUint8List(),
+        options: options,
+      );
+      debugPrint('✅ EMO-MODEL: GPU Delegate enabled successfully');
+    } catch (e) {
+      debugPrint('⚠️ EMO-MODEL: GPU failed. Falling back to CPU...');
+
+      final cpuOptions = InterpreterOptions();
+      _interpreter = Interpreter.fromBuffer(
+        modelData.buffer.asUint8List(),
+        options: cpuOptions,
+      );
+      debugPrint('✅ EMO-MODEL: Loaded on CPU instead');
+    }
+
     _interpreter!.allocateTensors();
     _loaded = true;
   }

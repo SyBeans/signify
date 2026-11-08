@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:tflite_flutter/tflite_flutter.dart';
 
@@ -19,7 +20,30 @@ class SignModelService {
     _labels = List<String>.from(jsonDecode(labelsJson));
     final modelData = await rootBundle.load('assets/models/sign_model.tflite');
 
-    _interpreter = Interpreter.fromBuffer(modelData.buffer.asUint8List());
+    // ── Try GPU, Fallback to CPU ──
+    try {
+      final options = InterpreterOptions();
+      options.addDelegate(GpuDelegateV2());
+      debugPrint('⏳ SIGN-MODEL: Attempting GPU Delegate...');
+
+      _interpreter = Interpreter.fromBuffer(
+        modelData.buffer.asUint8List(),
+        options: options,
+      );
+      debugPrint('✅ SIGN-MODEL: GPU Delegate enabled successfully');
+    } catch (e) {
+      debugPrint(
+        '⚠️ SIGN-MODEL: GPU failed (BiLSTMs usually lack GPU support). Falling back to CPU...',
+      );
+
+      final cpuOptions = InterpreterOptions();
+      _interpreter = Interpreter.fromBuffer(
+        modelData.buffer.asUint8List(),
+        options: cpuOptions,
+      );
+      debugPrint('✅ SIGN-MODEL: Loaded on CPU instead');
+    }
+
     _interpreter!.allocateTensors();
     _loaded = true;
   }

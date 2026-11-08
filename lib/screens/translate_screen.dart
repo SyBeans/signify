@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'dart:math' as math;
+import 'dart:typed_data';
 import 'package:camera/camera.dart';
+import 'package:flutter/foundation.dart'; // Required for compute()
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -16,6 +18,45 @@ import '../services/tts_service.dart';
 import '../theme.dart';
 import '../widgets/landmark_painter.dart';
 import '../utils/sign_mapping.dart';
+
+// ═══════════════════════════════════════════════════════════
+// ISOLATE FUNCTION FOR EMOTION CROP (Optimization #1)
+// ═══════════════════════════════════════════════════════════
+List<double> _extractFaceCropInBackground(Map<String, dynamic> data) {
+  final Uint8List bytes = data['bytes'];
+  final int width = data['width'];
+  final int height = data['height'];
+  final int rowStride = data['rowStride'];
+  final int pixelStride = data['pixelStride'];
+  final double x0 = data['x0'];
+  final double x1 = data['x1'];
+  final double y0 = data['y0'];
+  final double y1 = data['y1'];
+  final bool isFrontCamera = data['isFrontCamera'];
+
+  final raw = List<double>.filled(48 * 48, 0.0);
+  for (int yy = 0; yy < 48; yy++) {
+    for (int xx = 0; xx < 48; xx++) {
+      final px = x0 + (xx / 48.0) * (x1 - x0);
+      final py = y0 + (yy / 48.0) * (y1 - y0);
+      double rawX, rawY;
+      if (isFrontCamera) {
+        rawX = 1.0 - py;
+        rawY = px;
+      } else {
+        rawX = py;
+        rawY = 1.0 - px;
+      }
+      final srcX = (rawX * width).toInt().clamp(0, width - 1);
+      final srcY = (rawY * height).toInt().clamp(0, height - 1);
+      final idx = srcY * rowStride + srcX * pixelStride;
+      if (idx >= 0 && idx < bytes.length) {
+        raw[yy * 48 + xx] = bytes[idx] / 255.0;
+      }
+    }
+  }
+  return raw;
+}
 
 class TranslateScreen extends StatefulWidget {
   final bool isActive;
@@ -41,17 +82,11 @@ class _TranslateScreenState extends State<TranslateScreen> {
 
   List<CameraDescription> _cameras = [];
   int _cameraIndex = 0;
-
-  // OVERRIDE to LOW (index 0) to match validated plugin_test perf profile.
-  // Was: LandmarkConfig.defaultResolutionIndex. Keep in sync with config if
-  // you want the default persisted across restarts.
-  int _resIndex = 0;
+  int _resIndex = 0; // LOW default
 
   bool _isSwitching = false;
   bool _isProcessing = false;
 
-  // _frameCounter → raw frames (drives skip logic)
-  // _processFrameCounter → processed frames (drives alternating)
   int _frameCounter = 0;
   int _processFrameCounter = 0;
 
@@ -76,7 +111,6 @@ class _TranslateScreenState extends State<TranslateScreen> {
 
   List<MapEntry<String, double>> _topPredictions = [];
 
-  // Hand-Drop Auto-Save Logic
   Timer? _handDropTimer;
   int _handDropSecondsLeft = 0;
 
@@ -92,25 +126,11 @@ class _TranslateScreenState extends State<TranslateScreen> {
   bool get _cameraReady =>
       _controller != null && _controller!.value.isInitialized;
 
-  // ══════════════════════════════════════════════════════════
-  // RESOLUTION-AWARE PERFORMANCE TUNING
-  // ══════════════════════════════════════════════════════════
-  // LOW  (index 0, ~240p) → webcam-style: process every frame,
-  //                          alternate hands/face per processed frame,
-  //                          emotion every 3rd face frame
-  // MED  (index 1, ~480p) → skip every 2nd raw frame, hands every
-  //                          processed frame, face every 2nd processed
-  //                          frame, emotion every 5th face frame
-  // HIGH (index 2, ~720p) → same as MED
-  //
-  // VALIDATED ON TECNO CK7n:
-  //   LOW  → ~15 FPS  (usable for signing)
-  //   MED  → ~5 FPS
-  //   HIGH → ~5 FPS
-  // ══════════════════════════════════════════════════════════
-  int get _rawFrameSkipMod => _resIndex == 0 ? 1 : 2;
-  bool get _alternateMediaPipe => _resIndex == 0;
-  int get _effectiveEmotionSkip => _resIndex == 0 ? 3 : 5;
+  // ── UNIVERSAL PERFORMANCE PROFILE ──
+  int get _rawFrameSkipMod => _resIndex == 2 ? 2 : 1;
+  bool get _alternateMediaPipe => true;
+  int get _effectiveEmotionSkip =>
+      _resIndex == 0 ? 5 : (_resIndex == 1 ? 6 : 8);
 
   @override
   void initState() {
@@ -120,13 +140,22 @@ class _TranslateScreenState extends State<TranslateScreen> {
   }
 
   Future<void> _loadModels() async {
+    // 1. Load Sign Model independently
     try {
       await _signService.load();
-      await _emotionService.load();
-      if (mounted) setState(() => _modelsReady = true);
-    } catch (e) {
-      debugPrint('Model load error: $e');
+    } catch (e, st) {
+      debugPrint('❌ Sign Model load error: $e\n$st');
     }
+
+    // 2. Load Emotion Model independently
+    try {
+      await _emotionService.load();
+    } catch (e, st) {
+      debugPrint('❌ Emotion Model load error: $e\n$st');
+    }
+
+    if (mounted) setState(() => _modelsReady = true);
+    debugPrint('✅ Model loading sequence finished');
   }
 
   @override
@@ -226,7 +255,6 @@ class _TranslateScreenState extends State<TranslateScreen> {
   Future<void> _processFrame(CameraImage image) async {
     if (_isProcessing || _isSwitching) return;
 
-    // ── Resolution-aware raw frame skip ──
     _frameCounter++;
     if (_frameCounter % _rawFrameSkipMod != 0) return;
 
@@ -234,20 +262,10 @@ class _TranslateScreenState extends State<TranslateScreen> {
     try {
       _processFrameCounter++;
 
-      // ── Decide which MediaPipe runs this frame ──
-      final bool isHandFrame;
-      final bool isFaceFrame;
-      if (_alternateMediaPipe) {
-        // LOW: webcam-style alternating (one model per frame)
-        isHandFrame = (_processFrameCounter % 2 == 0);
-        isFaceFrame = (_processFrameCounter % 2 == 1);
-      } else {
-        // MED/HIGH: hands every processed frame, face every 2nd
-        isHandFrame = true;
-        isFaceFrame = (_processFrameCounter % 2 == 0);
-      }
+      // Universal Alternating Logic
+      final bool isHandFrame = (_processFrameCounter % 2 == 0);
+      final bool isFaceFrame = (_processFrameCounter % 2 == 1);
 
-      // ── Hands ──
       if (isHandFrame) {
         try {
           _handPlugin?.processFrame(
@@ -257,7 +275,6 @@ class _TranslateScreenState extends State<TranslateScreen> {
         } catch (_) {}
       }
 
-      // ── Face ──
       final faceOut = <LandmarkPoint>[];
       if (isFaceFrame) {
         final faces = await _faceDetector?.detectFacesFromCameraImage(image);
@@ -293,9 +310,7 @@ class _TranslateScreenState extends State<TranslateScreen> {
 
       if (mounted) {
         setState(() {
-          // Only refresh the face overlay on face frames (avoids flicker)
           if (isFaceFrame) _faceLandmarks = faceOut;
-          // Trigger rebuild so hand stream updates land in the UI
           _handLandmarks = List.from(_handLandmarks);
         });
       }
@@ -371,8 +386,6 @@ class _TranslateScreenState extends State<TranslateScreen> {
     final bufferLimitMs = (4.0 * 1000).toInt();
     _signBuffer.removeWhere((e) => nowMs - e.key > bufferLimitMs);
 
-    // Hand-drop delay: wait 6 frames before wiping buffer/votes/top-3
-    // (matches HAND_DROP_DELAY in test_webcam_combined.py)
     if (_handLandmarks.isEmpty) {
       _framesSinceHandSeen++;
       if (_framesSinceHandSeen >= 6) {
@@ -398,8 +411,6 @@ class _TranslateScreenState extends State<TranslateScreen> {
         final lm = _handLandmarks[h * 21 + i];
         final base = h * 63 + i * 3;
 
-        // ORIENTATION FIX: un-rotate portrait → landscape, then mirror x
-        // (matches cv2.flip(frame, 1) in test_webcam_combined.py)
         double lx, ly;
         if (_isFrontCamera) {
           lx = 1.0 - lm.y;
@@ -563,30 +574,20 @@ class _TranslateScreenState extends State<TranslateScreen> {
       final y1 = (cy + size * 0.35).clamp(0.0, 1.0);
 
       final yPlane = image.planes[0];
-      final bytes = yPlane.bytes;
-      final rowStride = yPlane.bytesPerRow;
-      final pixelStride = yPlane.bytesPerPixel ?? 1;
-      final raw = List<double>.filled(48 * 48, 0.0);
 
-      for (int yy = 0; yy < 48; yy++) {
-        for (int xx = 0; xx < 48; xx++) {
-          final px = x0 + (xx / 48.0) * (x1 - x0);
-          final py = y0 + (yy / 48.0) * (y1 - y0);
-          double rawX, rawY;
-          if (_isFrontCamera) {
-            rawX = 1.0 - py;
-            rawY = px;
-          } else {
-            rawX = py;
-            rawY = 1.0 - px;
-          }
-          final srcX = (rawX * image.width).toInt().clamp(0, image.width - 1);
-          final srcY = (rawY * image.height).toInt().clamp(0, image.height - 1);
-          final idx = srcY * rowStride + srcX * pixelStride;
-          if (idx >= 0 && idx < bytes.length)
-            raw[yy * 48 + xx] = bytes[idx] / 255.0;
-        }
-      }
+      // ── Optimization #1: Run heavy math on a background Isolate ──
+      final raw = await compute(_extractFaceCropInBackground, {
+        'bytes': yPlane.bytes,
+        'width': image.width,
+        'height': image.height,
+        'rowStride': yPlane.bytesPerRow,
+        'pixelStride': yPlane.bytesPerPixel ?? 1,
+        'x0': x0,
+        'x1': x1,
+        'y0': y0,
+        'y1': y1,
+        'isFrontCamera': _isFrontCamera,
+      });
 
       final lmVec = <double>[];
       for (final lm in preview) {
@@ -598,7 +599,6 @@ class _TranslateScreenState extends State<TranslateScreen> {
       if (result != null) {
         final (_, _, rawProbs) = result;
 
-        // v11.8 was balanced at TRAINING time — no post-softmax re-weighting.
         final weighted = rawProbs;
 
         int frameIdx = 0;
@@ -678,6 +678,7 @@ class _TranslateScreenState extends State<TranslateScreen> {
     super.dispose();
   }
 
+  // (The build() method is unchanged, just paste your existing build method here)
   // ────────────────────────────────────────────────────────────
   // BUILD — unchanged from previous version
   // ────────────────────────────────────────────────────────────
