@@ -472,7 +472,10 @@ class _TranslateScreenState extends State<TranslateScreen> {
       });
     }
 
-    if (conf >= 0.50) {
+    // 🆕 FIX B: Lower confidence threshold 0.50 → 0.45
+    // v5 spreads softmax across 106 classes → top confidence is slightly lower
+    // 0.45 still means "top sign is 2x+ more likely than average (0.94%)"
+    if (conf >= 0.45) {
       _signVoteBuffer.add(label);
       if (_signVoteBuffer.length > 6) _signVoteBuffer.removeAt(0);
 
@@ -484,11 +487,20 @@ class _TranslateScreenState extends State<TranslateScreen> {
         );
 
         if (winner.value >= 4) {
+          // 🆕 FIX A: REST only blocks at 6/6 (unanimous)
+          // At 4-5/6, ignore REST so real signs can win the vote
           if (winner.key == "REST") {
-            debugPrint('🛑 REST BLOCKED (${winner.value}/6)');
-            _restBlockedCount++;
-            _signVoteBuffer.clear();
-            _signCooldownUntil = DateTime.now().millisecondsSinceEpoch + 1000;
+            if (winner.value >= 6) {
+              // Unanimous REST → real idle → block
+              debugPrint('🛑 REST BLOCKED (${winner.value}/6)');
+              _restBlockedCount++;
+              _signVoteBuffer.clear();
+              _signCooldownUntil = DateTime.now().millisecondsSinceEpoch + 1000;
+            } else {
+              // REST won 4-5/6 → weak signal → don't block
+              // Leave votes in buffer so real signs can still accumulate
+              debugPrint('🟡 REST weak (${winner.value}/6) — ignoring');
+            }
             return;
           }
 
@@ -799,7 +811,6 @@ class _TranslateScreenState extends State<TranslateScreen> {
               ),
             ),
 
-            // 🆕 FIX 1: Wrap instead of Row — prevents overflow with L text
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 20),
               child: Align(
@@ -993,7 +1004,6 @@ class _TranslateScreenState extends State<TranslateScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    // 🆕 FIX 2: Expanded on header text, Flexible on status
                     Row(
                       children: [
                         Expanded(
@@ -1042,7 +1052,6 @@ class _TranslateScreenState extends State<TranslateScreen> {
                     ),
                     const SizedBox(height: 10),
 
-                    // 🆕 FIX 3: Blue chip — Flexible + ellipsis (main overflow fix)
                     if (state.sentence.isNotEmpty)
                       Row(
                         children: [
