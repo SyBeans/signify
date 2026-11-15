@@ -7,8 +7,10 @@ class SignModelService {
   Interpreter? _interpreter;
   List<String> _labels = [];
   bool _loaded = false;
+  bool _isGpu = false; // 🆕 tracks GPU success
 
   bool get isLoaded => _loaded;
+  bool get isGpu => _isGpu; // 🆕 expose to UI
   List<String> get labels => _labels;
 
   static const int numFrames = 30;
@@ -20,7 +22,7 @@ class SignModelService {
     _labels = List<String>.from(jsonDecode(labelsJson));
     final modelData = await rootBundle.load('assets/models/sign_model.tflite');
 
-    // ── Try GPU, Fallback to CPU ──
+    // ── Try GPU, fallback to CPU ──
     try {
       final options = InterpreterOptions();
       options.addDelegate(GpuDelegateV2());
@@ -30,7 +32,8 @@ class SignModelService {
         modelData.buffer.asUint8List(),
         options: options,
       );
-      debugPrint('✅ SIGN-MODEL: GPU Delegate enabled successfully');
+      _isGpu = true;
+      debugPrint('✅ SIGN-MODEL: GPU Delegate enabled');
     } catch (e) {
       debugPrint(
         '⚠️ SIGN-MODEL: GPU failed (BiLSTMs usually lack GPU support). Falling back to CPU...',
@@ -41,10 +44,14 @@ class SignModelService {
         modelData.buffer.asUint8List(),
         options: cpuOptions,
       );
-      debugPrint('✅ SIGN-MODEL: Loaded on CPU instead');
+      _isGpu = false;
+      debugPrint('✅ SIGN-MODEL: Loaded on CPU');
     }
 
     _interpreter!.allocateTensors();
+    debugPrint(
+      '📊 SIGN-MODEL: ${_labels.length} labels loaded (last: ${_labels.last})',
+    );
     _loaded = true;
   }
 
@@ -58,7 +65,6 @@ class SignModelService {
 
       final input = sequence.reshape([1, numFrames, numFeatures]);
       in0.setTo(input);
-
       _interpreter!.invoke();
 
       final outData = out0.data;

@@ -5,6 +5,7 @@ import 'package:tflite_flutter/tflite_flutter.dart';
 class EmotionModelService {
   Interpreter? _interpreter;
   bool _loaded = false;
+  bool _isGpu = false; // 🆕
 
   static const int imgSize = 48;
   static const int numLandmarks = 936;
@@ -18,6 +19,7 @@ class EmotionModelService {
   ];
 
   bool get isLoaded => _loaded;
+  bool get isGpu => _isGpu; // 🆕
 
   Future<void> load() async {
     if (_loaded) return;
@@ -25,7 +27,6 @@ class EmotionModelService {
       'assets/models/emotion_model.tflite',
     );
 
-    // ── Try GPU, Fallback to CPU ──
     try {
       final options = InterpreterOptions();
       options.addDelegate(GpuDelegateV2());
@@ -35,7 +36,8 @@ class EmotionModelService {
         modelData.buffer.asUint8List(),
         options: options,
       );
-      debugPrint('✅ EMO-MODEL: GPU Delegate enabled successfully');
+      _isGpu = true;
+      debugPrint('✅ EMO-MODEL: GPU Delegate enabled');
     } catch (e) {
       debugPrint('⚠️ EMO-MODEL: GPU failed. Falling back to CPU...');
 
@@ -44,7 +46,8 @@ class EmotionModelService {
         modelData.buffer.asUint8List(),
         options: cpuOptions,
       );
-      debugPrint('✅ EMO-MODEL: Loaded on CPU instead');
+      _isGpu = false;
+      debugPrint('✅ EMO-MODEL: Loaded on CPU');
     }
 
     _interpreter!.allocateTensors();
@@ -68,7 +71,6 @@ class EmotionModelService {
 
       in0.setTo(imgInput);
       in1.setTo(lmInput);
-
       interp.invoke();
 
       final outData = out0.data;

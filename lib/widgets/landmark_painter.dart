@@ -14,30 +14,45 @@ class LandmarkPainter extends CustomPainter {
   final List<LandmarkPoint> handLandmarks;
   final Size previewSize;
   final bool isFrontCamera;
+  final bool showFullHand; // 🆕 true = 21 pts + skeleton; false = 6 minimal
+  final bool faceIsGreen; // 🆕 true = green; false = light green
 
   LandmarkPainter({
     required this.faceLandmarks,
     required this.handLandmarks,
     required this.previewSize,
     required this.isFrontCamera,
+    required this.showFullHand,
+    required this.faceIsGreen,
   });
 
-  // ── 5 face reference points (matches plugin_test + test_webcam) ──
-  //   10  = forehead
-  //   234 = left cheek
-  //   152 = chin
-  //   454 = right cheek
-  //   1   = nose tip
   static const _faceIndices = [10, 234, 152, 454, 1];
-
-  // ── 6 hand reference points per hand (matches plugin_test) ──
-  //   0  = wrist
-  //   4  = thumb tip
-  //   8  = index finger tip
-  //   12 = middle finger tip
-  //   16 = ring finger tip
-  //   20 = pinky tip
   static const _handIndices = [0, 4, 8, 12, 16, 20];
+
+  // Full 21-point skeleton connections (used only when showFullHand)
+  static const List<List<int>> _handConnections = [
+    [0, 1],
+    [1, 2],
+    [2, 3],
+    [3, 4],
+    [0, 5],
+    [5, 6],
+    [6, 7],
+    [7, 8],
+    [5, 9],
+    [9, 10],
+    [10, 11],
+    [11, 12],
+    [9, 13],
+    [13, 14],
+    [14, 15],
+    [15, 16],
+    [13, 17],
+    [17, 18],
+    [18, 19],
+    [19, 20],
+    [0, 17],
+  ];
 
   Offset _rotate(double x, double y) {
     if (isFrontCamera) {
@@ -129,10 +144,13 @@ class LandmarkPainter extends CustomPainter {
       );
     }
 
-    // ─── FACE: 5 dots with white center ───
+    // ─── FACE: 5 dots — green if GPU, light green if CPU ───
     if (faceLandmarks.length >= 455) {
+      final faceColor = faceIsGreen
+          ? Colors.green.withOpacity(LandmarkConfig.faceDotOpacity)
+          : Colors.lightGreen.withOpacity(LandmarkConfig.faceDotOpacity * 0.8);
       final facePaint = Paint()
-        ..color = Colors.red.withOpacity(LandmarkConfig.faceDotOpacity)
+        ..color = faceColor
         ..style = PaintingStyle.fill;
       final faceInner = Paint()..color = Colors.white;
 
@@ -149,10 +167,14 @@ class LandmarkPainter extends CustomPainter {
       }
     }
 
-    // ─── HANDS: 6 dots per hand with white center, no lines ───
+    // ─── HANDS: 21 points if GPU, 6 points if CPU ───
     final handPaint = Paint()
       ..color = Colors.green
       ..style = PaintingStyle.fill;
+    final handLine = Paint()
+      ..color = Colors.green.withOpacity(0.7)
+      ..strokeWidth = 2.0
+      ..style = PaintingStyle.stroke;
     final handInner = Paint()..color = Colors.white;
 
     const perHand = 21;
@@ -161,7 +183,6 @@ class LandmarkPainter extends CustomPainter {
     for (int h = 0; h + perHand <= handLandmarks.length; h += perHand) {
       final slice = handLandmarks.sublist(h, h + perHand);
 
-      // Centroid for the reject-radius hallucination filter
       double cx = 0, cy = 0;
       for (final lm in slice) {
         cx += lm.x;
@@ -171,15 +192,53 @@ class LandmarkPainter extends CustomPainter {
       cy /= slice.length;
       final anchor = Offset(cx, cy);
 
-      for (final idx in _handIndices) {
-        final lm = slice[idx];
-        final dx = (lm.x - cx).abs();
-        final dy = (lm.y - cy).abs();
-        if (dx > rejectRadius || dy > rejectRadius) continue;
+      if (showFullHand) {
+        // ── FULL 21-POINT SKELETON ──
+        final pts = <Offset?>[];
+        for (final lm in slice) {
+          final dx = (lm.x - cx).abs();
+          final dy = (lm.y - cy).abs();
+          if (dx > rejectRadius || dy > rejectRadius) {
+            pts.add(null);
+            continue;
+          }
+          pts.add(_mapHand(lm, scaledW, scaledH, offsetX, offsetY, anchor));
+        }
 
-        final p = _mapHand(lm, scaledW, scaledH, offsetX, offsetY, anchor);
-        canvas.drawCircle(p, LandmarkConfig.handTipRadius, handPaint);
-        canvas.drawCircle(p, 1.5, handInner);
+        // Skeleton lines
+        for (final c in _handConnections) {
+          final a = pts[c[0]];
+          final b = pts[c[1]];
+          if (a != null && b != null) canvas.drawLine(a, b, handLine);
+        }
+
+        // All 21 dots
+        for (int i = 0; i < pts.length; i++) {
+          final p = pts[i];
+          if (p == null) continue;
+          final isTip =
+              i == 0 || i == 4 || i == 8 || i == 12 || i == 16 || i == 20;
+          canvas.drawCircle(
+            p,
+            isTip
+                ? LandmarkConfig.handTipRadius
+                : LandmarkConfig.handJointRadius,
+            handPaint,
+          );
+          if (isTip) canvas.drawCircle(p, 1.5, handInner);
+        }
+      } else {
+        // ── MINIMAL 6-POINT (wrist + 5 fingertips) ──
+        for (final idx in _handIndices) {
+          final lm = slice[idx];
+          final dx = (lm.x - cx).abs();
+          final dy = (lm.y - cy).abs();
+          if (dx > rejectRadius || dy > rejectRadius) continue;
+
+          final p = _mapHand(lm, scaledW, scaledH, offsetX, offsetY, anchor);
+          canvas.drawCircle(p, LandmarkConfig.handTipRadius, handPaint);
+          canvas.drawCircle(p, 1.5, handInner);
+        }
       }
     }
   }

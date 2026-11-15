@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:math' as math;
 import 'dart:typed_data';
 import 'package:camera/camera.dart';
-import 'package:flutter/foundation.dart'; // Required for compute()
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -19,9 +19,6 @@ import '../theme.dart';
 import '../widgets/landmark_painter.dart';
 import '../utils/sign_mapping.dart';
 
-// ═══════════════════════════════════════════════════════════
-// ISOLATE FUNCTION FOR EMOTION CROP (Optimization #1)
-// ═══════════════════════════════════════════════════════════
 List<double> _extractFaceCropInBackground(Map<String, dynamic> data) {
   final Uint8List bytes = data['bytes'];
   final int width = data['width'];
@@ -82,7 +79,7 @@ class _TranslateScreenState extends State<TranslateScreen> {
 
   List<CameraDescription> _cameras = [];
   int _cameraIndex = 0;
-  int _resIndex = 0; // LOW default
+  int _resIndex = 0;
 
   bool _isSwitching = false;
   bool _isProcessing = false;
@@ -109,6 +106,10 @@ class _TranslateScreenState extends State<TranslateScreen> {
   int _emotionFrameCounter = 0;
   final List<String> _emotionVoteBuffer = [];
 
+  bool _signUsesGpu = false;
+  bool _emotionUsesGpu = false;
+  int _restBlockedCount = 0;
+
   List<MapEntry<String, double>> _topPredictions = [];
 
   Timer? _handDropTimer;
@@ -126,7 +127,6 @@ class _TranslateScreenState extends State<TranslateScreen> {
   bool get _cameraReady =>
       _controller != null && _controller!.value.isInitialized;
 
-  // ── UNIVERSAL PERFORMANCE PROFILE ──
   int get _rawFrameSkipMod => _resIndex == 2 ? 2 : 1;
   bool get _alternateMediaPipe => true;
   int get _effectiveEmotionSkip =>
@@ -140,22 +140,20 @@ class _TranslateScreenState extends State<TranslateScreen> {
   }
 
   Future<void> _loadModels() async {
-    // 1. Load Sign Model independently
     try {
       await _signService.load();
+      _signUsesGpu = _signService.isGpu;
     } catch (e, st) {
       debugPrint('❌ Sign Model load error: $e\n$st');
     }
-
-    // 2. Load Emotion Model independently
     try {
       await _emotionService.load();
+      _emotionUsesGpu = _emotionService.isGpu;
     } catch (e, st) {
       debugPrint('❌ Emotion Model load error: $e\n$st');
     }
-
     if (mounted) setState(() => _modelsReady = true);
-    debugPrint('✅ Model loading sequence finished');
+    debugPrint('✅ SIGN GPU: $_signUsesGpu | EMO GPU: $_emotionUsesGpu');
   }
 
   @override
@@ -172,7 +170,6 @@ class _TranslateScreenState extends State<TranslateScreen> {
     if (_controller != null) return;
     final status = await Permission.camera.request();
     if (status != PermissionStatus.granted) return;
-
     if (_cameras.isEmpty) {
       _cameras = await availableCameras();
       _cameraIndex = _cameras.indexWhere(
@@ -185,12 +182,10 @@ class _TranslateScreenState extends State<TranslateScreen> {
 
   Future<void> _openCamera() async {
     if (_cameras.isEmpty) return;
-
     try {
       await _controller?.dispose();
     } catch (_) {}
     _controller = null;
-
     _controller = CameraController(
       _cameras[_cameraIndex],
       LandmarkConfig.resolutions[_resIndex],
@@ -201,7 +196,6 @@ class _TranslateScreenState extends State<TranslateScreen> {
     } catch (e) {
       return;
     }
-
     _faceDetector ??= await FaceDetector.create();
     _handPlugin ??= HandLandmarkerPlugin.create(
       numHands: 2,
@@ -211,19 +205,16 @@ class _TranslateScreenState extends State<TranslateScreen> {
 
     _handSub ??= _handPlugin!.landmarkStream.listen((hands) {
       final lms = <LandmarkPoint>[];
-
       if (hands.isNotEmpty) {
         for (final lm in hands[0].landmarks) {
           lms.add(LandmarkPoint(lm.x, lm.y, lm.z));
         }
-
         if (hands.length > 1) {
           final h1Wrist = hands[0].landmarks[0];
           final h2Wrist = hands[1].landmarks[0];
           final dx = h1Wrist.x - h2Wrist.x;
           final dy = h1Wrist.y - h2Wrist.y;
           final dist = math.sqrt(dx * dx + dy * dy);
-
           if (dist > 0.12) {
             for (final lm in hands[1].landmarks) {
               lms.add(LandmarkPoint(lm.x, lm.y, lm.z));
@@ -254,15 +245,11 @@ class _TranslateScreenState extends State<TranslateScreen> {
 
   Future<void> _processFrame(CameraImage image) async {
     if (_isProcessing || _isSwitching) return;
-
     _frameCounter++;
     if (_frameCounter % _rawFrameSkipMod != 0) return;
-
     _isProcessing = true;
     try {
       _processFrameCounter++;
-
-      // Universal Alternating Logic
       final bool isHandFrame = (_processFrameCounter % 2 == 0);
       final bool isFaceFrame = (_processFrameCounter % 2 == 1);
 
@@ -280,7 +267,6 @@ class _TranslateScreenState extends State<TranslateScreen> {
         final faces = await _faceDetector?.detectFacesFromCameraImage(image);
         final frameW = image.width.toDouble();
         final frameH = image.height.toDouble();
-
         if (faces != null && faces.isNotEmpty) {
           final mesh = faces.first.mesh;
           if (mesh != null) {
@@ -329,7 +315,6 @@ class _TranslateScreenState extends State<TranslateScreen> {
 
   void _checkHandDropForAutoSave() {
     final state = context.read<AppState>();
-
     if (state.sentence.isEmpty) {
       _handDropTimer?.cancel();
       _handDropTimer = null;
@@ -338,26 +323,21 @@ class _TranslateScreenState extends State<TranslateScreen> {
       }
       return;
     }
-
     if (_handLandmarks.isEmpty) {
       if (_handDropTimer == null || !_handDropTimer!.isActive) {
         setState(() => _handDropSecondsLeft = 3);
-
         _handDropTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
           if (!mounted) {
             timer.cancel();
             return;
           }
-
           if (_handDropSecondsLeft <= 1) {
             timer.cancel();
             _handDropTimer = null;
-
             if (state.sentence.isNotEmpty) {
               final sentenceCopy = state.englishSentence;
               state.saveSentence();
               setState(() => _handDropSecondsLeft = 0);
-
               ScaffoldMessenger.of(context).showSnackBar(
                 SnackBar(
                   content: Text('✅ Auto-saved: "$sentenceCopy"'),
@@ -410,7 +390,6 @@ class _TranslateScreenState extends State<TranslateScreen> {
       for (int i = 0; i < 21; i++) {
         final lm = _handLandmarks[h * 21 + i];
         final base = h * 63 + i * 3;
-
         double lx, ly;
         if (_isFrontCamera) {
           lx = 1.0 - lm.y;
@@ -419,7 +398,6 @@ class _TranslateScreenState extends State<TranslateScreen> {
           lx = lm.y;
           ly = lm.x;
         }
-
         frame[base + 0] = lx;
         frame[base + 1] = ly;
         frame[base + 2] = lm.z;
@@ -440,7 +418,6 @@ class _TranslateScreenState extends State<TranslateScreen> {
     _signMotionHistory.add(motion);
     if (_signMotionHistory.length > 10) _signMotionHistory.removeAt(0);
     final anyMotion = _signMotionHistory.any((m) => m > 0.015);
-
     if (!anyMotion) {
       _signBuffer.clear();
       return;
@@ -448,10 +425,8 @@ class _TranslateScreenState extends State<TranslateScreen> {
 
     _signBuffer.add(MapEntry(nowMs, frame));
     if (nowMs < _signCooldownUntil) return;
-
     _signPredictCounter++;
     if (_signPredictCounter % 2 != 0) return;
-
     if (_signBuffer.length < 8) return;
 
     final tMin = _signBuffer.first.key;
@@ -509,22 +484,27 @@ class _TranslateScreenState extends State<TranslateScreen> {
         );
 
         if (winner.value >= 4) {
+          if (winner.key == "REST") {
+            debugPrint('🛑 REST BLOCKED (${winner.value}/6)');
+            _restBlockedCount++;
+            _signVoteBuffer.clear();
+            _signCooldownUntil = DateTime.now().millisecondsSinceEpoch + 1000;
+            return;
+          }
+
           final state = context.read<AppState>();
           if (state.sentence.isEmpty ||
               state.sentence.last['en'] != winner.key) {
             final englishWord = winner.key;
             final filipinoWord = getFilipino(englishWord);
-
             state.addToSentence(
               englishWord,
               filipinoWord,
               state.currentEmotion,
             );
             state.setSignState(englishWord, conf);
-
             _signVoteBuffer.clear();
             _signCooldownUntil = DateTime.now().millisecondsSinceEpoch + 1000;
-
             if (state.autoSpeak) {
               final textToSpeak = state.speechLanguage == 'fil'
                   ? filipinoWord
@@ -548,7 +528,6 @@ class _TranslateScreenState extends State<TranslateScreen> {
     if (faceOut.length < 400 || _isEmotionInFlight) return;
     _emotionFrameCounter++;
     if (_emotionFrameCounter % _effectiveEmotionSkip != 0) return;
-
     _isEmotionInFlight = true;
     try {
       final preview = <LandmarkPoint>[];
@@ -564,7 +543,6 @@ class _TranslateScreenState extends State<TranslateScreen> {
       double xMax = preview.map((l) => l.x).reduce(math.max);
       double yMin = preview.map((l) => l.y).reduce(math.min);
       double yMax = preview.map((l) => l.y).reduce(math.max);
-
       final cx = (xMin + xMax) / 2;
       final cy = (yMin + yMax) / 2;
       final size = math.max(xMax - xMin, yMax - yMin) * 1.55;
@@ -574,8 +552,6 @@ class _TranslateScreenState extends State<TranslateScreen> {
       final y1 = (cy + size * 0.35).clamp(0.0, 1.0);
 
       final yPlane = image.planes[0];
-
-      // ── Optimization #1: Run heavy math on a background Isolate ──
       final raw = await compute(_extractFaceCropInBackground, {
         'bytes': yPlane.bytes,
         'width': image.width,
@@ -598,9 +574,7 @@ class _TranslateScreenState extends State<TranslateScreen> {
       final result = _emotionService.predict(raw, lmVec);
       if (result != null) {
         final (_, _, rawProbs) = result;
-
         final weighted = rawProbs;
-
         int frameIdx = 0;
         double frameTop = weighted[0];
         for (int i = 1; i < 4; i++) {
@@ -609,15 +583,12 @@ class _TranslateScreenState extends State<TranslateScreen> {
             frameIdx = i;
           }
         }
-
         String frameLabel = EmotionModelService.classNames[frameIdx];
         if (frameTop > 0.6 && frameLabel == 'Surprise') frameLabel = 'Urgent';
-
         if (frameTop >= 0.40) {
           _emotionVoteBuffer.add(frameLabel);
           if (_emotionVoteBuffer.length > 8) _emotionVoteBuffer.removeAt(0);
         }
-
         if (_emotionVoteBuffer.isNotEmpty) {
           final counts = <String, int>{};
           for (final lbl in _emotionVoteBuffer)
@@ -625,7 +596,6 @@ class _TranslateScreenState extends State<TranslateScreen> {
           final winner = counts.entries.reduce(
             (a, b) => a.value >= b.value ? a : b,
           );
-
           if (mounted) {
             context.read<AppState>().setEmotion(winner.key, frameTop);
           }
@@ -678,10 +648,6 @@ class _TranslateScreenState extends State<TranslateScreen> {
     super.dispose();
   }
 
-  // (The build() method is unchanged, just paste your existing build method here)
-  // ────────────────────────────────────────────────────────────
-  // BUILD — unchanged from previous version
-  // ────────────────────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
     final state = context.watch<AppState>();
@@ -709,7 +675,6 @@ class _TranslateScreenState extends State<TranslateScreen> {
         bottom: false,
         child: Column(
           children: [
-            // ── Top row ──
             Padding(
               padding: const EdgeInsets.fromLTRB(20, 16, 16, 12),
               child: Row(
@@ -834,52 +799,53 @@ class _TranslateScreenState extends State<TranslateScreen> {
               ),
             ),
 
-            // ── Chips row: HAND | FACE | Emotion ──
+            // 🆕 FIX 1: Wrap instead of Row — prevents overflow with L text
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 20),
-              child: Row(
-                children: [
-                  _detectChip('HAND', _handDetected),
-                  const SizedBox(width: 8),
-                  _detectChip('FACE', _faceDetected),
-                  if (state.showEmotion) ...[
-                    const SizedBox(width: 8),
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 10,
-                        vertical: 6,
-                      ),
-                      decoration: BoxDecoration(
-                        color: Colors.white.withOpacity(0.08),
-                        borderRadius: BorderRadius.circular(20),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Text(
-                            emoData.$1,
-                            style: const TextStyle(fontSize: 12),
-                          ),
-                          const SizedBox(width: 6),
-                          Text(
-                            emo.toUpperCase(),
-                            style: TextStyle(
-                              fontSize: 11,
-                              fontWeight: FontWeight.w800,
-                              letterSpacing: 0.6,
-                              color: emoData.$2,
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Wrap(
+                  spacing: 8,
+                  runSpacing: 6,
+                  children: [
+                    _detectChip('HAND', _handDetected),
+                    _detectChip('FACE', _faceDetected),
+                    if (state.showEmotion)
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 6,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withOpacity(0.08),
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              emoData.$1,
+                              style: const TextStyle(fontSize: 12),
                             ),
-                          ),
-                        ],
+                            const SizedBox(width: 6),
+                            Text(
+                              emo.toUpperCase(),
+                              style: TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w800,
+                                letterSpacing: 0.6,
+                                color: emoData.$2,
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
-                    ),
                   ],
-                ],
+                ),
               ),
             ),
             const SizedBox(height: 14),
 
-            // ── Live camera preview ──
             Expanded(
               flex: 5,
               child: Container(
@@ -912,6 +878,8 @@ class _TranslateScreenState extends State<TranslateScreen> {
                                     previewSize:
                                         _controller!.value.previewSize!,
                                     isFrontCamera: _isFrontCamera,
+                                    showFullHand: _signUsesGpu,
+                                    faceIsGreen: _emotionUsesGpu,
                                   ),
                                 ),
                               ),
@@ -935,7 +903,6 @@ class _TranslateScreenState extends State<TranslateScreen> {
             ),
             const SizedBox(height: 14),
 
-            // ── Top-3 predictions ──
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 20),
               child: Row(
@@ -970,7 +937,6 @@ class _TranslateScreenState extends State<TranslateScreen> {
             ),
             const SizedBox(height: 14),
 
-            // ── Confidence bar ──
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 20),
               child: Column(
@@ -1013,7 +979,6 @@ class _TranslateScreenState extends State<TranslateScreen> {
             ),
             const SizedBox(height: 14),
 
-            // ── Sentence builder ──
             Expanded(
               flex: 6,
               child: Container(
@@ -1028,40 +993,46 @@ class _TranslateScreenState extends State<TranslateScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
+                    // 🆕 FIX 2: Expanded on header text, Flexible on status
                     Row(
                       children: [
-                        Text(
-                          'SENTENCE BUILDER',
-                          style: TextStyle(
-                            fontSize: 10,
-                            fontWeight: FontWeight.w800,
-                            letterSpacing: 1.5,
-                            color: AppColors.textSoft,
+                        Expanded(
+                          child: Text(
+                            'SENTENCE BUILDER',
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: 10,
+                              fontWeight: FontWeight.w800,
+                              letterSpacing: 1.5,
+                              color: AppColors.textSoft,
+                            ),
                           ),
                         ),
-                        const Spacer(),
                         if (_handDropSecondsLeft > 0)
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 8,
-                              vertical: 2,
-                            ),
-                            decoration: BoxDecoration(
-                              color: AppColors.orange.withOpacity(0.1),
-                              borderRadius: BorderRadius.circular(10),
-                            ),
-                            child: Text(
-                              'Hand dropped · Saving in $_handDropSecondsLeft s...',
-                              style: const TextStyle(
-                                fontSize: 10,
-                                color: AppColors.orange,
-                                fontWeight: FontWeight.bold,
+                          Flexible(
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 8,
+                                vertical: 2,
+                              ),
+                              decoration: BoxDecoration(
+                                color: AppColors.orange.withOpacity(0.1),
+                                borderRadius: BorderRadius.circular(10),
+                              ),
+                              child: Text(
+                                'Hand dropped · $_handDropSecondsLeft s',
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  fontSize: 10,
+                                  color: AppColors.orange,
+                                  fontWeight: FontWeight.bold,
+                                ),
                               ),
                             ),
                           )
                         else if (state.sentence.isNotEmpty)
                           Text(
-                            '${(state.lastSignConfidence * 100).toStringAsFixed(0)}% confidence',
+                            '${(state.lastSignConfidence * 100).toStringAsFixed(0)}% conf',
                             style: const TextStyle(
                               fontSize: 11,
                               color: AppColors.textSoft,
@@ -1071,25 +1042,30 @@ class _TranslateScreenState extends State<TranslateScreen> {
                     ),
                     const SizedBox(height: 10),
 
+                    // 🆕 FIX 3: Blue chip — Flexible + ellipsis (main overflow fix)
                     if (state.sentence.isNotEmpty)
                       Row(
                         children: [
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 12,
-                              vertical: 6,
-                            ),
-                            decoration: BoxDecoration(
-                              color: AppColors.blue,
-                              borderRadius: BorderRadius.circular(20),
-                            ),
-                            child: Text(
-                              topChipText,
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontWeight: FontWeight.w800,
-                                fontSize: 12,
-                                letterSpacing: 0.6,
+                          Flexible(
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 12,
+                                vertical: 6,
+                              ),
+                              decoration: BoxDecoration(
+                                color: AppColors.blue,
+                                borderRadius: BorderRadius.circular(20),
+                              ),
+                              child: Text(
+                                topChipText,
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.w800,
+                                  fontSize: 12,
+                                  letterSpacing: 0.6,
+                                ),
                               ),
                             ),
                           ),
@@ -1146,7 +1122,6 @@ class _TranslateScreenState extends State<TranslateScreen> {
                                             ],
                                           ),
                                         ),
-
                                       if (state.displayLanguage == 'fil' ||
                                           state.displayLanguage == 'both')
                                         Padding(
@@ -1175,10 +1150,13 @@ class _TranslateScreenState extends State<TranslateScreen> {
                                             ),
                                           ),
                                         ),
-
                                       const SizedBox(height: 10),
                                       if (state.sentence.isNotEmpty)
-                                        Row(
+                                        Wrap(
+                                          spacing: 6,
+                                          runSpacing: 4,
+                                          crossAxisAlignment:
+                                              WrapCrossAlignment.center,
                                           children: [
                                             Text(
                                               emoData.$1,
@@ -1186,7 +1164,6 @@ class _TranslateScreenState extends State<TranslateScreen> {
                                                 fontSize: 14,
                                               ),
                                             ),
-                                            const SizedBox(width: 6),
                                             Text(
                                               emo,
                                               style: TextStyle(
@@ -1196,7 +1173,7 @@ class _TranslateScreenState extends State<TranslateScreen> {
                                               ),
                                             ),
                                             const Text(
-                                              '  ·  grammatical marker: none',
+                                              '· grammatical marker: none',
                                               style: AppText.small,
                                             ),
                                           ],
@@ -1251,7 +1228,6 @@ class _TranslateScreenState extends State<TranslateScreen> {
                           ),
                         ),
                         const SizedBox(width: 8),
-
                         _iconBtn(
                           Icons.save_outlined,
                           AppColors.blue,
@@ -1261,7 +1237,6 @@ class _TranslateScreenState extends State<TranslateScreen> {
                             _handDropTimer?.cancel();
                             _handDropTimer = null;
                             setState(() => _handDropSecondsLeft = 0);
-
                             final sentenceCopy = state.englishSentence;
                             await state.saveSentence();
                             if (context.mounted) {
@@ -1275,7 +1250,6 @@ class _TranslateScreenState extends State<TranslateScreen> {
                             }
                           },
                         ),
-
                         const SizedBox(width: 8),
                         _iconBtn(
                           Icons.delete_outline_rounded,
