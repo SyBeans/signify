@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import '../providers/app_state.dart';
 import '../theme.dart';
 import 'emergency_setup_screen.dart';
+import 'about_screen.dart'; // 🆕
 
 class SettingsScreen extends StatelessWidget {
   const SettingsScreen({super.key});
@@ -102,7 +103,15 @@ class SettingsScreen extends StatelessWidget {
             onTap: () => _showClearHistoryDialog(context, s),
           ),
           const SizedBox(height: 10),
-          _NavTile(title: 'About Signify', onTap: () {}),
+          // 🆕 Navigate to About screen
+          _NavTile(
+            title: 'About Signify',
+            subtitle: 'Version, models, and team',
+            onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const AboutScreen()),
+            ),
+          ),
         ],
       ),
     );
@@ -124,7 +133,7 @@ class SettingsScreen extends StatelessWidget {
           FilledButton(
             style: FilledButton.styleFrom(
               backgroundColor: AppColors.red,
-              foregroundColor: Colors.white, // <--- ADD THIS LINE
+              foregroundColor: Colors.white,
             ),
             onPressed: () {
               s.clearHistory();
