@@ -72,7 +72,7 @@ class AboutScreen extends StatelessWidget {
             const SizedBox(height: 20),
             Center(
               child: Text(
-                '© 2025 Signify Team · All rights reserved',
+                '© 2026 Signify Team · All rights reserved',
                 style: AppText.small,
               ),
             ),
@@ -102,21 +102,41 @@ class AboutScreen extends StatelessWidget {
       ),
       child: Column(
         children: [
+          // 🆕 App icon from assets
           Container(
-            width: 80,
-            height: 80,
+            width: 92,
+            height: 92,
             decoration: BoxDecoration(
-              color: Colors.white.withOpacity(0.08),
-              borderRadius: BorderRadius.circular(20),
-              border: Border.all(color: Colors.white.withOpacity(0.15)),
+              borderRadius: BorderRadius.circular(22),
+              border: Border.all(
+                color: Colors.white.withOpacity(0.18),
+                width: 2,
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.25),
+                  blurRadius: 16,
+                  offset: const Offset(0, 6),
+                ),
+              ],
             ),
-            child: const Icon(
-              Icons.sign_language_rounded,
-              color: Colors.white,
-              size: 44,
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(20),
+              child: Image.asset(
+                'assets/icon/app_icon.jpeg',
+                fit: BoxFit.cover,
+                errorBuilder: (context, error, stack) => Container(
+                  color: Colors.white.withOpacity(0.08),
+                  child: const Icon(
+                    Icons.sign_language_rounded,
+                    color: Colors.white,
+                    size: 44,
+                  ),
+                ),
+              ),
             ),
           ),
-          const SizedBox(height: 14),
+          const SizedBox(height: 16),
           const Text(
             'Signify',
             style: TextStyle(
@@ -130,7 +150,7 @@ class AboutScreen extends StatelessWidget {
           const Padding(
             padding: EdgeInsets.symmetric(horizontal: 8),
             child: Text(
-              'Offline AI Filipino Sign Language Recognition & Translation',
+              'An Offline AI-Based Filipino Sign Language Recognition and Translation Mobile Application',
               textAlign: TextAlign.center,
               style: TextStyle(
                 fontSize: 12,
