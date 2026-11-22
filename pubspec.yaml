@@ -42,6 +42,7 @@ flutter:
     - assets/models/
     - assets/icon/app_icon.png
     - assets/icon/app_icon_foreground.png
+    - assets/icon/splash_logo.png                  # 🆕 Added for splash
 
 flutter_launcher_icons:
   android: "launcher_icon"
@@ -54,11 +55,11 @@ flutter_launcher_icons:
 
 flutter_native_splash:
   color: "#0F172A"
-  image: assets/icon/app_icon.png
+  image: assets/icon/splash_logo.png               # 🆕 Changed to transparent logo
   android: true
   ios: true
   web: false
   android_12:
     color: "#0F172A"
-    image: assets/icon/app_icon_foreground.png
-    icon_background_color: "#000000"
+    image: assets/icon/splash_logo.png             # 🆕 Changed to transparent logo
+    icon_background_color: "#0F172A"               # 🆕 Changed to Navy (blends in)
