@@ -14,10 +14,15 @@ import '../config/landmark_config.dart';
 import '../providers/app_state.dart';
 import '../services/sign_model_service.dart';
 import '../services/emotion_model_service.dart';
+import '../services/engineered_features.dart'; // 🆕 v12.3
 import '../services/tts_service.dart';
 import '../theme.dart';
 import '../widgets/landmark_painter.dart';
 import '../utils/sign_mapping.dart';
+
+// 🆕 FPS backports from plugin_test
+const int kUIThrottleMs = 80;
+const int kSignSkipEmotionBufferThreshold = 4;
 
 List<double> _extractFaceCropInBackground(Map<String, dynamic> data) {
   final Uint8List bytes = data['bytes'];
@@ -109,6 +114,7 @@ class _TranslateScreenState extends State<TranslateScreen> {
   bool _signUsesGpu = false;
   bool _emotionUsesGpu = false;
   int _restBlockedCount = 0;
+  int _lastUIUpdateMs = 0; // 🆕 UI throttle
 
   List<MapEntry<String, double>> _topPredictions = [];
 
@@ -131,6 +137,10 @@ class _TranslateScreenState extends State<TranslateScreen> {
   bool get _alternateMediaPipe => true;
   int get _effectiveEmotionSkip =>
       _resIndex == 0 ? 5 : (_resIndex == 1 ? 6 : 8);
+
+  // 🆕 Skip emotion while actively signing (FPS backport)
+  bool get _isActivelySigning =>
+      _signBuffer.length >= kSignSkipEmotionBufferThreshold;
 
   @override
   void initState() {
@@ -294,7 +304,9 @@ class _TranslateScreenState extends State<TranslateScreen> {
         _lastFpsTime = now;
       }
 
-      if (mounted) {
+      // 🆕 UI throttle — max ~12.5 setState/sec (FPS backport)
+      if (mounted && (now - _lastUIUpdateMs) >= kUIThrottleMs) {
+        _lastUIUpdateMs = now;
         setState(() {
           if (isFaceFrame) _faceLandmarks = faceOut;
           _handLandmarks = List.from(_handLandmarks);
@@ -303,7 +315,10 @@ class _TranslateScreenState extends State<TranslateScreen> {
 
       if (_modelsReady) {
         if (isHandFrame) _updateSignStream(image, faceOut);
-        if (isFaceFrame) _updateEmotion(image, faceOut);
+        // 🆕 Skip emotion while actively signing (FPS backport)
+        if (isFaceFrame && !_isActivelySigning) {
+          _updateEmotion(image, faceOut);
+        }
         _checkHandDropForAutoSave();
       }
     } catch (e) {
@@ -472,9 +487,6 @@ class _TranslateScreenState extends State<TranslateScreen> {
       });
     }
 
-    // 🆕 FIX B: Lower confidence threshold 0.50 → 0.45
-    // v5 spreads softmax across 106 classes → top confidence is slightly lower
-    // 0.45 still means "top sign is 2x+ more likely than average (0.94%)"
     if (conf >= 0.45) {
       _signVoteBuffer.add(label);
       if (_signVoteBuffer.length > 6) _signVoteBuffer.removeAt(0);
@@ -487,18 +499,13 @@ class _TranslateScreenState extends State<TranslateScreen> {
         );
 
         if (winner.value >= 4) {
-          // 🆕 FIX A: REST only blocks at 6/6 (unanimous)
-          // At 4-5/6, ignore REST so real signs can win the vote
           if (winner.key == "REST") {
             if (winner.value >= 6) {
-              // Unanimous REST → real idle → block
               debugPrint('🛑 REST BLOCKED (${winner.value}/6)');
               _restBlockedCount++;
               _signVoteBuffer.clear();
               _signCooldownUntil = DateTime.now().millisecondsSinceEpoch + 1000;
             } else {
-              // REST won 4-5/6 → weak signal → don't block
-              // Leave votes in buffer so real signs can still accumulate
               debugPrint('🟡 REST weak (${winner.value}/6) — ignoring');
             }
             return;
@@ -583,10 +590,18 @@ class _TranslateScreenState extends State<TranslateScreen> {
         lmVec.add(lm.y);
       }
 
-      final result = _emotionService.predict(raw, lmVec);
+      // 🆕 v12.3: compute 26 engineered features
+      final engineered = engineeredFeatures(lmVec);
+
+      // 🆕 v12.3: 3-input predict
+      final result = _emotionService.predict(raw, lmVec, engineered);
       if (result != null) {
         final (_, _, rawProbs) = result;
+
+        // v12.3: raw softmax — no post-softmax re-weighting.
+        // Class weights {1.0, 1.45, 1.05, 1.0} applied at TRAIN time only.
         final weighted = rawProbs;
+
         int frameIdx = 0;
         double frameTop = weighted[0];
         for (int i = 1; i < 4; i++) {
