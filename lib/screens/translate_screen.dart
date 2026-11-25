@@ -410,7 +410,7 @@ class _TranslateScreenState extends State<TranslateScreen> {
           lx = 1.0 - lm.y;
           ly = 1.0 - lm.x;
         } else {
-          lx = lm.y;
+          lx = 1.0 - lm.y;
           ly = lm.x;
         }
         frame[base + 0] = lx;
